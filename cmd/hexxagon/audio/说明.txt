@@ -1,0 +1,19 @@
+白棋吃红棋时候.mp3 → white_capture_red_before.mp3
+
+白棋吃红棋之后.mp3 → white_capture_red_after.mp3
+
+白棋分裂.mp3 → white_split.mp3
+
+白棋跳跃.mp3 → white_jump.mp3
+
+红棋吃白棋时候.mp3 → red_capture_white_before.mp3
+
+红棋吃白棋之后.mp3 → red_capture_white_after.mp3
+
+红棋分裂.mp3 → red_split.mp3
+
+取消选择棋子.mp3 → cancel_select_piece.mp3
+
+选择棋子.mp3 → select_piece.mp3
+
+游戏结束.mp3 → game_over.mp3

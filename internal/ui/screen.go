@@ -1,3 +1,4 @@
+// File /ui/screen.go
 package ui
 
 import (
@@ -45,6 +46,7 @@ type GameScreen struct {
 	audioManager    *assets.AudioManager
 	aiDelayUntil    time.Time
 	offscreen       *ebiten.Image
+	anims           []*FrameAnim // 正在播放的动画列表
 }
 
 // NewGameScreen 构造并初始化游戏界面

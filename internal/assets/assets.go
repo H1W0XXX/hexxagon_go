@@ -72,7 +72,7 @@ func LoadAudio(name string) (*audio.Player, error) {
 	if f, err := os.Open(mp3Path); err == nil {
 		defer f.Close()
 		// mp3.Decode 使用 Context 解码
-		decoded, err := mp3.Decode(audioContext, f)
+		decoded, err := mp3.DecodeWithSampleRate(audioContext.SampleRate(), f)
 		if err != nil {
 			return nil, fmt.Errorf("解码音频 %s 失败: %w", mp3Path, err)
 		}

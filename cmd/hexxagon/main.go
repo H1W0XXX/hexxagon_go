@@ -26,7 +26,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	ebiten.SetVsyncEnabled(false) // 禁用VSync，手动控制帧率
+	ebiten.SetTPS(30)             // 每秒逻辑更新次数限制为30
 	ebiten.SetWindowSize(screenW, screenH)
 	ebiten.SetWindowSize(screenW*ScreenScale, screenH*ScreenScale)
 	ebiten.SetWindowTitle("Hexxagon")

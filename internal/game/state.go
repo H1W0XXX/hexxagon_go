@@ -2,6 +2,7 @@ package game
 
 import (
 	"errors"
+	"fmt"
 )
 
 // GameState 包含了整个游戏的状态，包括棋盘、当前玩家、分数和胜负状态
@@ -88,9 +89,11 @@ func (gs *GameState) MakeMove(m Move) (int, error) {
 func (gs *GameState) checkGameOver() {
 	// 如果已经结束，直接返回
 	if gs.GameOver {
+
 		return
 	}
-
+	// 先把所有被围的小块“吃”掉
+	gs.fillEnclosedRegions()
 	// 统计棋盘上各状态数量
 	var countA, countB, emptyCount int
 	for _, coord := range gs.Board.AllCoords() {
@@ -111,13 +114,10 @@ func (gs *GameState) checkGameOver() {
 	// 结束条件：棋盘无空格，或任一方无棋子，或任一方无合法走法
 	if emptyCount == 0 || countA == 0 || countB == 0 || noMovesA || noMovesB {
 		gs.GameOver = true
-		// 最终统计一次分数（可选，如果你在其他地方也维护了 ScoreA/B）
+		// 最终统计一次分数
 		gs.updateScores()
 
-		// 判断胜利者：
-		//  - 如果 PlayerA 无棋子或无路可走，PlayerB 胜
-		//  - 如果 PlayerB 无棋子或无路可走，PlayerA 胜
-		//  - 否则按分数多的一方胜，平局时 Winner 置 Empty
+		// 判断胜利者
 		switch {
 		case countA == 0 || noMovesA:
 			gs.Winner = PlayerB
@@ -132,6 +132,17 @@ func (gs *GameState) checkGameOver() {
 				gs.Winner = Empty // 平局
 			}
 		}
+
+		// **在这里输出双方子数和胜者**
+		fmt.Printf("游戏结束！玩家 A: %d 个棋子，玩家 B: %d 个棋子。", gs.ScoreA, gs.ScoreB)
+		switch gs.Winner {
+		case PlayerA:
+			fmt.Println("胜者：玩家 A")
+		case PlayerB:
+			fmt.Println("胜者：玩家 B")
+		default:
+			fmt.Println("平局！")
+		}
 	}
 }
 
@@ -145,4 +156,61 @@ func (gs *GameState) Reset() {
 	radius := gs.Board.radius
 	newGs := NewGameState(radius)
 	*gs = *newGs
+}
+
+func (gs *GameState) fillEnclosedRegions() {
+	radius := gs.Board.radius
+	visited := make(map[HexCoord]bool)
+
+	// 遍历所有空格
+	for _, start := range gs.Board.AllCoords() {
+		if gs.Board.Get(start) != Empty || visited[start] {
+			continue
+		}
+
+		// BFS 收集这个空格连通区域
+		queue := []HexCoord{start}
+		region := []HexCoord{start}
+		visited[start] = true
+
+		touchesBorder := false
+		borderStates := make(map[CellState]bool)
+
+		for len(queue) > 0 {
+			cur := queue[0]
+			queue = queue[1:]
+
+			// 只要有一个格子在最外层，就不是封闭区
+			if abs(cur.Q) == radius || abs(cur.R) == radius || abs(cur.Q+cur.R) == radius {
+				touchesBorder = true
+			}
+
+			// 遍历相邻六个方向
+			for _, nb := range gs.Board.Neighbors(cur) {
+				switch s := gs.Board.Get(nb); s {
+				case Empty:
+					if !visited[nb] {
+						visited[nb] = true
+						queue = append(queue, nb)
+						region = append(region, nb)
+					}
+				case PlayerA, PlayerB:
+					borderStates[s] = true
+				}
+			}
+		}
+
+		// 如果区域不连边界，且只被 A 或只被 B 包围
+		if !touchesBorder && len(borderStates) == 1 {
+			var owner CellState
+			for p := range borderStates {
+				owner = p
+			}
+
+			// 把这个区域的所有空格，都当作 owner 的子
+			for _, c := range region {
+				_ = gs.Board.Set(c, owner)
+			}
+		}
+	}
 }

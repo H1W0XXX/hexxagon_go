@@ -15,7 +15,7 @@ import (
 
 //embed 所有 PNG
 
-//go:embed animation/**.png
+//go:embed animation
 var animFS embed.FS
 
 // AnimFrames["redJump/down"] = []*ebiten.Image{frame0, frame1, …}

@@ -1,16 +1,24 @@
-// search.go
+// game/ai.go
 package game
 
 import (
 	"math"
 	"math/rand"
+	"runtime"
 	"sort"
+	"sync"
 	"time"
 )
 
-func init() { rand.Seed(time.Now().UnixNano()) }
+func init() {
+	rand.Seed(time.Now().UnixNano())
+	runtime.GOMAXPROCS(runtime.NumCPU()) // 吃满物理/逻辑核心
+	rand.Seed(time.Now().UnixNano())
+}
 
-// -------- 公开入口 --------
+// ------------------------------------------------------------
+// 公共入口
+// ------------------------------------------------------------
 func FindBestMove(b *Board, player CellState) (Move, bool) {
 	moves := GenerateMoves(b, player)
 	if len(moves) == 0 {
@@ -20,94 +28,170 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	const depth = 4
 	const inf = 1 << 30
 
+	// ---------- 1) 走法粗评分 ----------
 	type scored struct {
 		mv    Move
 		score int
 	}
 	order := make([]scored, 0, len(moves))
-
-	// ---- 新的粗评分逻辑 ----
 	for _, m := range moves {
-		cnt, _ := m.ApplyPreview(b, player) // 感染数
+		cnt, _ := m.ApplyPreview(b, player) // 仍可用旧的预估
 		gain := cnt
-		if m.IsClone() { // 克隆多 1 子
-			gain += 1
+		if m.IsClone() {
+			gain++
 		}
-		order = append(order, scored{mv: m, score: gain})
+		order = append(order, scored{m, gain})
 	}
-	sort.Slice(order, func(i, j int) bool { // 分高的先扩展
-		return order[i].score > order[j].score
-	})
+	sort.Slice(order, func(i, j int) bool { return order[i].score > order[j].score })
 
+	// ---------- 2) 并行根节点 ----------
+	type result struct {
+		mv    Move
+		score int
+	}
+	resCh := make(chan result, len(order))
+	var wg sync.WaitGroup
+
+	alphaRoot := -inf
+	betaRoot := inf
+
+	for _, item := range order {
+		wg.Add(1)
+		go func(it scored) {
+			defer wg.Done()
+
+			nb := b.Clone()                   // 根节点仍做一次深拷贝
+			_, _ = it.mv.MakeMove(nb, player) // ⭐ 用 MakeMove 代替 Apply
+			// MakeMove 已自动更新 nb.hash
+
+			score := alphaBeta(nb, nb.hash,
+				Opponent(player), player, depth-1, alphaRoot, betaRoot)
+
+			resCh <- result{it.mv, score}
+		}(item)
+	}
+	wg.Wait()
+	close(resCh)
+
+	// ---------- 3) 汇总最佳 ----------
 	bestScore := -inf
 	var bestMoves []Move
-	alpha, beta := -inf, inf
-
-	for _, item := range order { // 经过排序的迭代
-		nb := b.Clone()
-		_, _ = item.mv.Apply(nb, player)
-		score := alphaBeta(nb, Opponent(player), player, depth-1, alpha, beta)
-
+	for r := range resCh {
 		switch {
-		case score > bestScore:
-			bestScore, bestMoves = score, bestMoves[:0]
-			bestMoves = append(bestMoves, item.mv)
-			alpha = max(alpha, score) // 更新上界
-		case score == bestScore:
-			bestMoves = append(bestMoves, item.mv)
+		case r.score > bestScore:
+			bestScore, bestMoves = r.score, []Move{r.mv}
+		case r.score == bestScore:
+			bestMoves = append(bestMoves, r.mv)
 		}
 	}
-
-	// 并列随机
 	choice := bestMoves[rand.Intn(len(bestMoves))]
 	return choice, true
 }
 
-// -------- α-β 剪枝 --------
-func alphaBeta(b *Board, current, original CellState, depth, alpha, beta int) int {
+// ------------------------------------------------------------
+// α-β + 置换表
+// ------------------------------------------------------------
+func alphaBeta(
+	b *Board,
+	hash uint64,
+	current, original CellState,
+	depth, alpha, beta int,
+) int {
 	if depth == 0 {
 		return evaluate(b, original)
 	}
+
+	// ---------- 置换表探测 ----------
+	if hit, val, flag := probeTT(hash, depth); hit {
+		switch flag {
+		case ttExact:
+			return val
+		case ttLower:
+			if val > alpha {
+				alpha = val
+			}
+		case ttUpper:
+			if val < beta {
+				beta = val
+			}
+		}
+		if alpha >= beta {
+			return val
+		}
+	}
+	alphaOrig := alpha // 用于写表判定
+
 	moves := GenerateMoves(b, current)
 	if len(moves) == 0 {
 		return evaluate(b, original)
 	}
 
-	// 按“潜在感染数”排序，可显著提高剪枝效率
+	// 走法排序：感染数降序
 	sort.Slice(moves, func(i, j int) bool {
 		ci, _ := moves[i].ApplyPreview(b, current)
 		cj, _ := moves[j].ApplyPreview(b, current)
 		return ci > cj
 	})
 
+	best := math.MinInt32
+	bestIdx := uint8(0)
+
 	if current == original { // 极大化
-		best := math.MinInt32
-		for _, m := range moves {
+		for i, m := range moves {
 			nb := b.Clone()
 			_, _ = m.Apply(nb, current)
-			best = max(best, alphaBeta(nb, Opponent(current), original, depth-1, alpha, beta))
+			childHash := hashBoard(nb)
+
+			score := alphaBeta(nb, childHash,
+				Opponent(current), original, depth-1, alpha, beta)
+
+			if score > best {
+				best = score
+				bestIdx = uint8(i)
+			}
 			alpha = max(alpha, best)
 			if beta <= alpha {
-				break
-			} // β 剪枝
+				break // β 剪枝
+			}
 		}
-		return best
+	} else { // 极小化
+		best = math.MaxInt32
+		for i, m := range moves {
+			nb := b.Clone()
+			_, _ = m.Apply(nb, current)
+			childHash := hashBoard(nb)
+
+			score := alphaBeta(nb, childHash,
+				Opponent(current), original, depth-1, alpha, beta)
+
+			if score < best {
+				best = score
+				bestIdx = uint8(i)
+			}
+			beta = min(beta, best)
+			if beta <= alpha {
+				break // α 剪枝
+			}
+		}
 	}
 
-	// 极小化
-	worst := math.MaxInt32
-	for _, m := range moves {
-		nb := b.Clone()
-		_, _ = m.Apply(nb, current)
-		worst = min(worst, alphaBeta(nb, Opponent(current), original, depth-1, alpha, beta))
-		beta = min(beta, worst)
-		if beta <= alpha {
-			break
-		} // α 剪枝
+	// ---------- 写回置换表 ----------
+	var flag ttFlag
+	switch {
+	case best <= alphaOrig:
+		flag = ttUpper
+	case best >= beta:
+		flag = ttLower
+	default:
+		flag = ttExact
 	}
-	return worst
+	storeTT(hash, depth, best, flag) // 分值
+	storeBestIdx(hash, bestIdx)      // 额外存根节点最佳着，函数见 tt.go
+
+	return best
 }
 
+// ------------------------------------------------------------
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -119,4 +203,8 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func DeepSearch(b *Board, hash uint64, side CellState, depth int) int {
+	return alphaBeta(b, hash, side, side, depth, -32000, 32000)
 }

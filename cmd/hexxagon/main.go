@@ -10,9 +10,10 @@ import (
 
 func main() {
 	const (
-		screenW    = 800
-		screenH    = 600
-		sampleRate = 44100
+		screenW     = 800
+		screenH     = 600
+		sampleRate  = 44100
+		ScreenScale = 1
 	)
 
 	ctx := audio.NewContext(sampleRate)
@@ -27,9 +28,12 @@ func main() {
 	}
 
 	ebiten.SetWindowSize(screenW, screenH)
+	ebiten.SetWindowSize(screenW*ScreenScale, screenH*ScreenScale)
 	ebiten.SetWindowTitle("Hexxagon")
 
 	if err := ebiten.RunGame(screen); err != nil {
 		log.Fatal(err)
 	}
 }
+
+// go build -ldflags="-s -w" -gcflags="all=-trimpath=${PWD}" -asmflags="all=-trimpath=${PWD}" -o hexAI.exe .\cmd\hexxagon\main.go

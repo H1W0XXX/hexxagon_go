@@ -1,13 +1,79 @@
 package ui
 
 import (
+	"fmt"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"math"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"hexxagon_go/internal/game"
 )
+
+func getBoardTransform(tileImg *ebiten.Image) (scale, orgX, orgY, tileW, tileH, vs float64) {
+	tileW = float64(tileImg.Bounds().Dx())
+	tileH = float64(tileImg.Bounds().Dy())
+	vs = tileH * math.Sqrt(3) / 2
+
+	cols := 2*BoardRadius + 1
+	rows := 2*BoardRadius + 1
+	boardW := float64(cols-1)*tileW*0.75 + tileW
+	boardH := vs*float64(rows-1) + tileH
+
+	scale = math.Min(float64(WindowWidth)/boardW, float64(WindowHeight)/boardH)
+	orgX = (float64(WindowWidth) - boardW*scale) / 2
+	orgY = (float64(WindowHeight) - boardH*scale) / 2
+	return
+}
+
+func cubeRound(xf, yf, zf float64) (int, int, int) {
+	rx := math.Round(xf)
+	ry := math.Round(yf)
+	rz := math.Round(zf)
+
+	dx := math.Abs(rx - xf)
+	dy := math.Abs(ry - yf)
+	dz := math.Abs(rz - zf)
+
+	if dx >= dy && dx >= dz {
+		rx = -ry - rz
+	} else if dy >= dz {
+		ry = -rx - rz
+	} else {
+		rz = -rx - ry
+	}
+	return int(rx), int(ry), int(rz)
+}
+
+// pixelToAxial 把屏幕像素坐标反算成 (q,r)
+func pixelToAxial(fx, fy float64, board *game.Board, tileImg *ebiten.Image) (game.HexCoord, bool) {
+	scale, orgX, orgY, tileWf, tileHf, vs := getBoardTransform(tileImg)
+	dx := tileWf * 0.75
+
+	// 1. 去掉平移、缩放
+	x := (fx - orgX) / scale
+	y := (fy - orgY) / scale
+
+	// 2. 再去掉把中心移到 (0,0)
+	x -= float64(BoardRadius) * dx
+	y -= float64(BoardRadius) * vs
+
+	// *** 关键补偿：移回半个瓦片的中心 ***
+	x -= tileWf / 2 // ← 新增
+	y -= tileHf / 2 // ← 新增
+
+	// 3. 浮点轴向
+	qf := x / dx
+	rf := y/vs - qf/2
+
+	// 4. 立方整体取整
+	xf, zf := qf, rf
+	yf := -xf - zf
+	rx, _, rz := cubeRound(xf, yf, zf)
+
+	coord := game.HexCoord{Q: rx, R: rz}
+	return coord, board.InBounds(coord)
+}
 
 // handleInput 处理鼠标点击事件，用于选中、移动并播放音效
 func (gs *GameScreen) handleInput() {
@@ -15,22 +81,12 @@ func (gs *GameScreen) handleInput() {
 	if !inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		return
 	}
-	// 获取鼠标屏幕坐标
 	mx, my := ebiten.CursorPosition()
-	fx, fy := float64(mx), float64(my)
+	//fmt.Println("mx,my")
+	//fmt.Println(mx, my)
+	coord, ok := pixelToAxial(float64(mx), float64(my), gs.state.Board, gs.tileImage)
 
-	// 计算瓦片宽高及棋盘中心
-	tileW, tileH := gs.tileImage.Bounds().Dx(), gs.tileImage.Bounds().Dy()
-	centerX, centerY := float64(WindowWidth)/2, float64(WindowHeight)/2
-
-	// 反向计算轴向坐标 (q, r)
-	vs := float64(tileH) * math.Sqrt(3) / 2
-	q := int(math.Round((fx - centerX) / (float64(tileW) * 0.75)))
-	r := int(math.Round((fy-centerY)/vs - float64(q)/2))
-	coord := game.HexCoord{Q: q, R: r}
-
-	// 点击不在棋盘范围，播放取消选棋音效
-	if !gs.state.Board.InBounds(coord) {
+	if !ok {
 		gs.audioManager.Play("cancel_select_piece")
 		return
 	}
@@ -97,6 +153,7 @@ func (gs *GameScreen) handleInput() {
 
 		} else {
 			seq = append(seq, "white_capture_red_before")
+			fmt.Println("white_capture_red_before")
 			total += 653 * time.Millisecond
 			seq = append(seq, "white_capture_red_after")
 			total += 548 * time.Millisecond

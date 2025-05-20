@@ -31,6 +31,17 @@ var Directions = []HexCoord{
 type Board struct {
 	radius int
 	cells  map[HexCoord]CellState
+	hash   uint64
+}
+
+func (b *Board) set(c HexCoord, s CellState) {
+	prev := b.cells[c]
+	if prev == s {
+		return
+	}
+	b.hash ^= zobristKey(c, prev) // 移除旧状态
+	b.cells[c] = s
+	b.hash ^= zobristKey(c, s) // 加入新状态
 }
 
 // NewBoard creates and initializes a new board with the given radius.
@@ -115,4 +126,63 @@ func (b *Board) Clone() *Board {
 		radius: b.radius,
 		cells:  newCells,
 	}
+}
+
+func (b *Board) applyMove(m Move, player CellState) (infected int, undo func()) {
+	// 修改格子并同时异或/反异或 hash
+	changed := make([]struct {
+		c    HexCoord
+		prev CellState
+	}, 0, 8)
+	set := func(c HexCoord, s CellState) {
+		prev := b.cells[c]
+		if prev == s {
+			return
+		}
+		b.hash ^= zobristKey(c, prev) // remove old
+		b.cells[c] = s
+		b.hash ^= zobristKey(c, s) // add new
+		changed = append(changed, struct {
+			c    HexCoord
+			prev CellState
+		}{c, prev})
+	}
+
+	// ……克隆 / 跳跃 / 感染逻辑，全用 set()
+
+	return infected, func() { // 撤销函数供 alphaBeta 回溯
+		for i := len(changed) - 1; i >= 0; i-- {
+			c := changed[i]
+			set(c.c, c.prev)
+		}
+	}
+}
+
+// Hash 返回当前局面的 Zobrist 哈希（供置换表/外部工具读取）
+func (b *Board) Hash() uint64 {
+	return b.hash
+}
+
+// CountPieces 统计棋盘上 pl 方棋子数量
+func (b *Board) CountPieces(pl CellState) int {
+	n := 0
+	for _, c := range b.AllCoords() {
+		if b.Get(c) == pl {
+			n++
+		}
+	}
+	return n
+}
+
+func (b *Board) ToFeature(side CellState) []float32 {
+	fe := make([]float32, len(b.AllCoords())) // 半径 3 = 37 格
+	for i, c := range b.AllCoords() {
+		switch b.Get(c) {
+		case side:
+			fe[i] = 1
+		case Opponent(side):
+			fe[i] = -1
+		}
+	}
+	return fe
 }

@@ -1,14 +1,16 @@
 package assets
 
 import (
+	"bytes"
+	"embed"
 	"fmt"
+	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/audio/wav"
 	"image/png"
 	"os"
 	"path/filepath"
 
-	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 )
 
@@ -16,20 +18,38 @@ import (
 // var audioContext = audio.NewContext(44100)
 var audioContext = audio.CurrentContext()
 
+//go:embed images/*.png
+var imageFS embed.FS
+
 // LoadImage 通过名称加载嵌入的 PNG 图片（不含扩展名）
 func LoadImage(name string) (*ebiten.Image, error) {
-	path := filepath.Join("assets", "images", name+".png")
-	f, err := os.Open(path)
+	// 直接从 embed.FS 读取
+	data, err := imageFS.ReadFile("images/" + name + ".png")
 	if err != nil {
-		return nil, fmt.Errorf("打开图片 %s 失败: %w", path, err)
+		return nil, fmt.Errorf("读取嵌入图片 %s 失败: %w", name, err)
 	}
-	defer f.Close()
-	img, err := png.Decode(f)
+	// 解码
+	img, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("解码图片 %s 失败: %w", path, err)
+		return nil, fmt.Errorf("解码嵌入图片 %s 失败: %w", name, err)
 	}
+	// 转为 Ebiten Image
 	return ebiten.NewImageFromImage(img), nil
 }
+
+//func LoadImage(name string) (*ebiten.Image, error) {
+//	path := filepath.Join("assets", "images", name+".png")
+//	f, err := os.Open(path)
+//	if err != nil {
+//		return nil, fmt.Errorf("打开图片 %s 失败: %w", path, err)
+//	}
+//	defer f.Close()
+//	img, err := png.Decode(f)
+//	if err != nil {
+//		return nil, fmt.Errorf("解码图片 %s 失败: %w", path, err)
+//	}
+//	return ebiten.NewImageFromImage(img), nil
+//}
 
 // LoadAudio 从项目根目录下的 assets/audio 目录加载音频文件（支持 WAV 和 MP3，不含扩展名），返回可播放的 Player
 func LoadAudio(name string) (*audio.Player, error) {

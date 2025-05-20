@@ -11,7 +11,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 )
 
-//go:embed audio/all_capture_after.mp3
+//go:embed audio/white_capture_red_before.mp3
 var audioFS embed.FS
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 	ctx := audio.NewContext(sampleRate)
 
 	// 读取文件内容
-	data, err := audioFS.ReadFile("audio/all_capture_after.mp3")
+	data, err := audioFS.ReadFile("audio/white_capture_red_before.mp3")
 	if err != nil {
 		log.Fatalf("读取音频失败: %v", err)
 	}
@@ -38,7 +38,7 @@ func main() {
 	}
 	player.Play()
 
-	fmt.Println("正在播放 all_capture_after.mp3...")
+	fmt.Println("正在播放 white_capture_red_before.mp3...")
 
 	// 等待音频播放完
 	for player.IsPlaying() {

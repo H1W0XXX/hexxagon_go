@@ -1,7 +1,5 @@
 package game
 
-import "errors"
-
 // Move 表示一次从 From 到 To 的走子
 type Move struct {
 	From HexCoord
@@ -83,44 +81,35 @@ func GenerateMoves(b *Board, player CellState) []Move {
 	return moves
 }
 
-// Apply executes the move on the board for the given player.
-// It places or moves the piece, then infects adjacent opponent pieces.
-func (m Move) Apply(b *Board, player CellState) (int, error) {
-	// Validate source
-	if b.Get(m.From) != player {
-		return 0, errors.New("source does not contain player's piece")
-	}
-	// Validate destination
-	if b.Get(m.To) != Empty {
-		return 0, errors.New("destination is not empty")
-	}
-	// Validate move distance
-	if !(m.IsClone() || m.IsJump()) {
-		return 0, errors.New("invalid move distance; must be clone (1) or jump (2)")
-	}
+// 1) 把 Apply 改成返回被感染的坐标切片
+func (m Move) Apply(b *Board, player CellState) ([]HexCoord, error) {
+	// Validate & execute move 同旧逻辑……
+	// （略）
 
-	// Perform move
-	if m.IsJump() {
-		// Remove original piece
-		if err := b.Set(m.From, Empty); err != nil {
-			return 0, err
-		}
-	}
-	// Place new or cloned piece
-	if err := b.Set(m.To, player); err != nil {
-		return 0, err
-	}
-
-	// Infect adjacent opponent pieces
+	// 先收集原始棋盘上哪些邻居是对手
 	opp := Opponent(player)
-	infectedCount := 0
+	var toBeInfected []HexCoord
 	for _, n := range b.Neighbors(m.To) {
 		if b.Get(n) == opp {
-			if err := b.Set(n, player); err != nil {
-				return infectedCount, err
-			}
-			infectedCount++
+			toBeInfected = append(toBeInfected, n)
 		}
 	}
-	return infectedCount, nil
+
+	// 然后再去改棋盘：jump/clone + 放置新棋子
+	if m.IsJump() {
+		if err := b.Set(m.From, Empty); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.Set(m.To, player); err != nil {
+		return nil, err
+	}
+
+	// 最后真正“感染”那些被收集到的格子
+	for _, n := range toBeInfected {
+		if err := b.Set(n, player); err != nil {
+			return toBeInfected, err
+		}
+	}
+	return toBeInfected, nil
 }

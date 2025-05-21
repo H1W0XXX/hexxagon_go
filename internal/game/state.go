@@ -64,24 +64,17 @@ func (gs *GameState) updateScores() {
 }
 
 // MakeMove 尝试执行一次玩家移动，并自动处理翻转、分数更新、切换回合和结束判定
-func (gs *GameState) MakeMove(m Move) (int, error) {
+func (gs *GameState) MakeMove(m Move) ([]HexCoord, undoInfo, error) {
 	if gs.GameOver {
-		return 0, errors.New("游戏已结束，无法继续移动")
+		return nil, undoInfo{}, errors.New("游戏已结束")
 	}
-	// 执行移动和感染
-	infected, err := m.Apply(gs.Board, gs.CurrentPlayer)
-	if err != nil {
-		return 0, err
-	}
-	// 更新分数
+	infectedCoords, undo := m.MakeMove(gs.Board, gs.CurrentPlayer)
 	gs.updateScores()
-	// 检查游戏是否结束
 	gs.checkGameOver()
-	// 如果未结束，切换到下一个玩家
 	if !gs.GameOver {
 		gs.CurrentPlayer = Opponent(gs.CurrentPlayer)
 	}
-	return infected, nil
+	return infectedCoords, undo, nil
 }
 
 // checkGameOver 判断游戏是否结束：

@@ -127,3 +127,32 @@ func createCombined(tileImg, pieceImg *ebiten.Image) *ebiten.Image {
 	img.DrawImage(pieceImg, op)
 	return img
 }
+
+// axialToScreen 把一个 HexCoord 映射成 screen（窗口）像素坐标中心点
+func axialToScreen(c game.HexCoord,
+	tileImg *ebiten.Image, screen *ebiten.Image) (float64, float64) {
+
+	// 1) 取出棋盘到 offscreen 的变换
+	boardScale, originX, originY, tileW, tileH, vs := getBoardTransform(tileImg)
+
+	// 2) 把 offscreen → screen 的缩放 & 居中
+	w, h := screen.Bounds().Dx(), screen.Bounds().Dy()
+	screenScale := math.Min(float64(w)/float64(WindowWidth),
+		float64(h)/float64(WindowHeight))
+	dx := (float64(w) - float64(WindowWidth)*screenScale) / 2
+	dy := (float64(h) - float64(WindowHeight)*screenScale) / 2
+
+	// 3) 在 offscreen 坐标系里算出该格子左上角
+	x0 := (float64(c.Q) + BoardRadius) * float64(tileW) * 0.75
+	y0 := (float64(c.R) + BoardRadius + float64(c.Q)/2) * vs
+	// 再加半个瓦片宽高得到中心
+	cx0 := x0 + float64(tileW)/2
+	cy0 := y0 + float64(tileH)/2
+
+	// 4) 把 offscreen 上的 (cx0,cy0) 缩放 & 平移到 screen
+	offX := originX + cx0*boardScale
+	offY := originY + cy0*boardScale
+	sx := offX*screenScale + dx
+	sy := offY*screenScale + dy
+	return sx, sy
+}

@@ -10,7 +10,9 @@ type undoInfo struct {
 }
 
 // MakeMove 在原盘执行走子，返回 (感染数, undoInfo)
-func (m Move) MakeMove(b *Board, player CellState) (infected int, undo undoInfo) {
+func (m Move) MakeMove(b *Board, player CellState) (infectedCoords []HexCoord, undo undoInfo) {
+	// 预分配一个足够装下所有可能被感染的 slice
+	infectedCoords = make([]HexCoord, 0, 6)
 	undo.changed = make([]undoCell, 0, 8)
 
 	// 内部 helper：写格子并记 prev
@@ -31,14 +33,15 @@ func (m Move) MakeMove(b *Board, player CellState) (infected int, undo undoInfo)
 	// --- 2. 终点放我方 ---
 	set(m.To, player)
 
-	// --- 3. 感染邻格 ---
+	// --- 3. 感染邻格，并记录坐标 ---
 	for _, n := range b.Neighbors(m.To) {
 		if b.Get(n) == Opponent(player) {
 			set(n, player)
-			infected++
+			infectedCoords = append(infectedCoords, n)
 		}
 	}
-	return infected, undo
+
+	return infectedCoords, undo
 }
 
 // UnmakeMove 按相反顺序恢复格子 & hash

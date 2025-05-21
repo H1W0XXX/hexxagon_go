@@ -122,10 +122,14 @@ func Evaluate(b *Board, player CellState) int {
 }
 
 func (m Move) ApplyPreview(b *Board, player CellState) (infected int, ok bool) {
-	infected, undo := m.MakeMove(b, player) // 原地改
-	b.UnmakeMove(undo)                      // 撤掉
-	return infected, true
+	// 调用 MakeMove 拿到被感染的坐标列表和 undo 信息
+	infectedCoords, undo := m.MakeMove(b, player)
+	// 撤销
+	b.UnmakeMove(undo)
+	// 返回感染数量
+	return len(infectedCoords), true
 }
+
 func hexDistance(a, b HexCoord) int {
 	dq := abs(a.Q - b.Q)
 	dr := abs(a.R - b.R)

@@ -3,7 +3,6 @@ package ui
 
 import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"hexxagon_go/internal/assets"
 	"math"
 	"time"
 
@@ -78,7 +77,6 @@ func pixelToAxial(fx, fy float64, board *game.Board, tileImg *ebiten.Image) (gam
 
 // handleInput 处理鼠标点击事件，用于选中、移动并播放音效
 func (gs *GameScreen) handleInput() {
-	// 只在鼠标左键刚按下时响应
 	if !inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		return
 	}
@@ -91,6 +89,7 @@ func (gs *GameScreen) handleInput() {
 
 	player := gs.state.CurrentPlayer
 	if gs.selected == nil {
+		// 仅负责选中，不再做走子相关逻辑
 		if gs.state.Board.Get(coord) == player {
 			gs.selected = &coord
 			gs.audioManager.Play("select_piece")
@@ -100,12 +99,9 @@ func (gs *GameScreen) handleInput() {
 		return
 	}
 
-	// 已选来源格，准备走子
 	move := game.Move{From: *gs.selected, To: coord}
-	infectedCoords, undo, err := gs.state.MakeMove(move)
-	_ = undo
-	if err != nil {
-		// 走子失败，恢复选中逻辑
+	if total, err := gs.performMove(move, player); err != nil {
+		// 走子失败，保持原有“重新选中/取消”逻辑
 		if gs.state.Board.Get(coord) == player {
 			gs.selected = &coord
 			gs.audioManager.Play("select_piece")
@@ -114,75 +110,8 @@ func (gs *GameScreen) handleInput() {
 			gs.audioManager.Play("cancel_select_piece")
 		}
 		return
+	} else {
+		gs.aiDelayUntil = time.Now().Add(total)
+		gs.selected = nil
 	}
-
-	// —— 播放移动动画 —— //
-	gs.addMoveAnim(move, player)
-
-	// —— 计算移动动画的时长 —— //
-	// 与 addMoveAnim 中使用的同样素材和 FPS
-	dirKey := directionKey(move.From, move.To)
-	var moveBase string
-	switch {
-	case move.IsClone() && player == game.PlayerA:
-		moveBase = "redClone/" + dirKey
-	case move.IsClone() && player == game.PlayerB:
-		moveBase = "whiteClone/" + dirKey
-	case move.IsJump() && player == game.PlayerA:
-		moveBase = "redJump/" + dirKey
-	case move.IsJump() && player == game.PlayerB:
-		moveBase = "whiteJump/" + dirKey
-	}
-	frames := assets.AnimFrames[moveBase]
-	const fps = 30
-	// moveDur = 帧数 / FPS 秒
-	moveDur := time.Duration(float64(len(frames)) / fps * float64(time.Second))
-
-	// —— 延迟播放感染动画 —— //
-	for _, inf := range infectedCoords {
-		gs.addInfectAnim(move.To, inf, player, moveDur)
-	}
-
-	// —— 构造并播放音效队列 —— //
-	var seq []string
-	total := moveDur // 确保音效也延迟同样时长
-	if move.IsClone() {
-		if player == game.PlayerA {
-			seq = append(seq, "red_split")
-			total += 966 * time.Millisecond
-		} else {
-			seq = append(seq, "white_split")
-			total += 470 * time.Millisecond
-		}
-	} else /* jump */ {
-		if player == game.PlayerA {
-			seq = append(seq, "red_split")
-			total += 966 * time.Millisecond
-		} else {
-			seq = append(seq, "white_jump")
-			total += 496 * time.Millisecond
-		}
-	}
-	if len(infectedCoords) > 0 {
-		if player == game.PlayerA {
-			seq = append(seq, "red_capture_white_before")
-			total += 287 * time.Millisecond
-			seq = append(seq, "red_capture_white_after")
-			total += 757 * time.Millisecond
-		} else {
-			seq = append(seq, "white_capture_red_before")
-			total += 653 * time.Millisecond
-			seq = append(seq, "white_capture_red_after")
-			total += 548 * time.Millisecond
-		}
-	}
-	seq = append(seq, "all_capture_after")
-	// 延迟播放音效
-	time.AfterFunc(moveDur, func() {
-		gs.audioManager.PlaySequential(seq...)
-	})
-
-	// AI 或下一个玩家延迟
-	gs.aiDelayUntil = time.Now().Add(total)
-	gs.selected = nil
 }

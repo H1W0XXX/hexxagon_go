@@ -1,124 +1,95 @@
-// internal/assets/animation.go
 package assets
 
 import (
 	"bytes"
 	"embed"
+	"fmt"
 	"image"
 	"image/png"
 	"io/fs"
-	"os"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
-//embed 所有 PNG
-
 //go:embed animation
 var animFS embed.FS
 
 type AnimData struct {
 	Frames []*ebiten.Image
-	AX, AY float64 // anchor (像素)
+	AX, AY float64
 	FPS    float64
 }
 
-var AnimDatas = map[string]AnimData{}
-var AnimFrames map[string][]*ebiten.Image
+var (
+	AnimDatas  = map[string]AnimData{}
+	AnimFrames = map[string][]*ebiten.Image{}
+)
 
 func init() {
-	AnimFrames = make(map[string][]*ebiten.Image)
-
-	baseDir := "internal/assets/animation"
-
-	// WalkDir 第一次只遍历目录，不递归文件
-	filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || !d.IsDir() || path == baseDir {
-			return err
-		}
-
-		// path 形如 ".../redJump/down"
-		rel, _ := filepath.Rel(baseDir, path) // "redJump/down"
-		rel = filepath.ToSlash(rel)           // 统一斜杠
-
-		// 读取该目录下所有 .png，并排序
-		files, _ := filepath.Glob(filepath.Join(path, "*.png"))
-		sort.Strings(files)
-
-		// ←───── 新增：为本目录准备帧切片与锚点 ──────→
-		var frames []*ebiten.Image
-		var ax, ay float64
-
-		for i, f := range files {
-			// ① 读原始 PNG
-			pngFile, _ := os.Open(f)
-			srcImg, _, _ := image.Decode(pngFile)
-			pngFile.Close()
-
-			// ② 转 ebiten.Image，收集帧
-			frames = append(frames, ebiten.NewImageFromImage(srcImg))
-
-			// ③ 仅用首帧计算锚点
-			if i == 0 {
-				ax, ay = autoAnchor(srcImg)
-			}
-		}
-
-		// —— 把结果写入全局表 —— //
-		if len(frames) > 0 {
-			AnimFrames[rel] = frames   // 旧用法保留
-			AnimDatas[rel] = AnimData{ // 新增锚点
-				Frames: frames,
-				AX:     ax,
-				AY:     ay,
-				FPS:    30, // 如有需要可改
-			}
-		}
-		return nil
-	})
+	loadDir("animation")
 }
 
-func loadEbitenImage(path string) *ebiten.Image {
-	imgFile, _ := os.Open(path)
-	defer imgFile.Close()
-	img, _, _ := image.Decode(imgFile)
-	return ebiten.NewImageFromImage(img)
-}
-
-// 递归遍历文件夹
-func loadDir(path string) {
-	entries, _ := fs.ReadDir(animFS, path)
-	if len(entries) == 0 {
+func loadDir(dir string) {
+	entries, err := fs.ReadDir(animFS, dir)
+	if err != nil {
+		fmt.Printf("错误：无法读取目录 %s: %v\n", dir, err)
 		return
 	}
 
-	// 收集当前目录下的 PNG
 	var pngFiles []string
 	for _, e := range entries {
+		sub := path.Join(dir, e.Name()) // ← 用 path.Join 保证分隔符是 '/'
 		if e.IsDir() {
-			loadDir(filepath.Join(path, e.Name())) // 继续递归
-		} else if strings.HasSuffix(e.Name(), ".png") {
-			pngFiles = append(pngFiles, filepath.Join(path, e.Name()))
+			//fmt.Printf("进入子目录：%s\n", sub)
+			loadDir(sub)
+		} else if strings.HasSuffix(strings.ToLower(e.Name()), ".png") {
+			pngFiles = append(pngFiles, sub)
 		}
 	}
 
 	if len(pngFiles) == 0 {
+		//fmt.Printf("警告：%s 下没有找到PNG文件\n", dir)
 		return
 	}
 
-	sort.Strings(pngFiles) // 001,002,… 顺序
-	key := strings.TrimPrefix(path, "animation/")
-	for _, fp := range pngFiles {
-		data, _ := animFS.ReadFile(fp)
-		img, _ := png.Decode(bytes.NewReader(data))
-		AnimFrames[key] = append(AnimFrames[key], ebiten.NewImageFromImage(img))
+	sort.Strings(pngFiles)
+	key := strings.TrimPrefix(dir, "animation/")
+
+	//fmt.Printf("加载动画：%s，帧数：%d\n", key, len(pngFiles))
+
+	var frames []*ebiten.Image
+	var ax, ay float64
+	for i, fp := range pngFiles {
+		data, err := animFS.ReadFile(fp)
+		if err != nil {
+			fmt.Printf("无法读取文件 %s: %v\n", fp, err)
+			continue
+		}
+		img, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			fmt.Printf("无法解码PNG %s: %v\n", fp, err)
+			continue
+		}
+		frame := ebiten.NewImageFromImage(img)
+		frames = append(frames, frame)
+		if i == 0 {
+			ax, ay = autoAnchor(img)
+		}
+	}
+
+	AnimFrames[key] = frames
+	AnimDatas[key] = AnimData{
+		Frames: frames,
+		AX:     ax,
+		AY:     ay,
+		FPS:    30,
 	}
 }
 
-// autoAnchor 取首帧非透明像素包络框中心；全透明就返回图片中心
+// autoAnchor 函数保持不变
 func autoAnchor(img image.Image) (float64, float64) {
 	minX, minY := img.Bounds().Max.X, img.Bounds().Max.Y
 	maxX, maxY := 0, 0
@@ -141,7 +112,6 @@ func autoAnchor(img image.Image) (float64, float64) {
 			}
 		}
 	}
-	// 全透明 ⇒ 取整图中心
 	if minX > maxX || minY > maxY {
 		return float64(img.Bounds().Dx()) / 2, float64(img.Bounds().Dy()) / 2
 	}

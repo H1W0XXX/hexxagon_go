@@ -90,7 +90,7 @@ func (gs *GameScreen) addMoveAnim(move game.Move, player game.CellState) {
 	//fmt.Println(base)
 	frames := assets.AnimFrames[base]
 	if len(frames) == 0 {
-		fmt.Printf("!跳跃或者复制动画资源缺失: %s\n", base)
+		//fmt.Printf("!跳跃或者复制动画资源缺失: %s\n", base)
 		return
 	}
 	gs.anims = append(gs.anims, &FrameAnim{
@@ -136,7 +136,7 @@ func (gs *GameScreen) addInfectAnim(
 	midY := (fy + ty) / 2
 	ang := math.Atan2(ty-fy, tx-fx)
 
-	fmt.Printf("ang %v", ang)
+	//fmt.Printf("ang %v", ang)
 	gs.anims = append(gs.anims, &FrameAnim{
 		Frames: frames,
 		FPS:    30,

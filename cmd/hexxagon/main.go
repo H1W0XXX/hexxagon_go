@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -16,19 +17,23 @@ func main() {
 		ScreenScale = 1
 	)
 
+	// —— 新增：启动参数 —— //
+	modeFlag := flag.String("mode", "pve", "游戏模式: pve(人机) 或 pvp(人人)")
+	flag.Parse()
+	aiEnabled := (*modeFlag == "pve") // pve=启用 AI，pvp=禁用 AI
+
 	ctx := audio.NewContext(sampleRate)
 	if ctx == nil {
 		log.Fatal("audio context not initialized")
 	}
-	//fmt.Println(ctx)
 
-	screen, err := ui.NewGameScreen(ctx)
+	screen, err := ui.NewGameScreen(ctx, aiEnabled) // 传入开关
 	if err != nil {
 		log.Fatal(err)
 	}
-	ebiten.SetVsyncEnabled(false) // 禁用VSync，手动控制帧率
-	ebiten.SetTPS(30)             // 每秒逻辑更新次数限制为30
-	ebiten.SetWindowSize(screenW, screenH)
+
+	ebiten.SetVsyncEnabled(false)
+	ebiten.SetTPS(30)
 	ebiten.SetWindowSize(screenW*ScreenScale, screenH*ScreenScale)
 	ebiten.SetWindowTitle("Hexxagon")
 

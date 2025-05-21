@@ -91,15 +91,18 @@ type GameScreen struct {
 	aiDelayUntil    time.Time
 	offscreen       *ebiten.Image
 	anims           []*FrameAnim // 正在播放的动画列表
+	aiEnabled       bool         // true=人机；false=人人
+	isAnimating     bool         // 标记是否正在播放动画
 }
 
 // NewGameScreen 构造并初始化游戏界面
-func NewGameScreen(ctx *audio.Context) (*GameScreen, error) {
+func NewGameScreen(ctx *audio.Context, aiEnabled bool) (*GameScreen, error) {
 
 	var err error
 	gs := &GameScreen{
 		state:       game.NewGameState(BoardRadius),
 		pieceImages: make(map[game.CellState]*ebiten.Image),
+		aiEnabled:   aiEnabled,
 		//audioManager: audioManager,
 	}
 
@@ -127,88 +130,161 @@ func NewGameScreen(ctx *audio.Context) (*GameScreen, error) {
 }
 
 // Update 每帧更新：处理用户输入和 AI（若有）
+//
+//	func (gs *GameScreen) Update() error {
+//		// 处理玩家输入（选中/移动）
+//		gs.audioManager.Update()
+//		gs.handleInput()
+//		return nil
+//	}
+//
+// performMove 执行一次完整落子，返回本次行动需要的总耗时（用于 aiDelayUntil）
+func (gs *GameScreen) performMove(move game.Move, player game.CellState) (time.Duration, error) {
+	gs.isAnimating = true // 开始动画时设置为 true
+
+	if move.IsJump() {
+		// Jump 类型：立即更新棋盘状态
+		infectedCoords, undo, err := gs.state.MakeMove(move)
+		_ = undo
+		if err != nil {
+			gs.isAnimating = false
+			return 0, err
+		}
+
+		// 播放移动动画
+		gs.addMoveAnim(move, player)
+
+		// 计算移动动画时长
+		dirKey := directionKey(move.From, move.To)
+		var moveBase string
+		if player == game.PlayerA {
+			moveBase = "redJump/" + dirKey
+		} else {
+			moveBase = "whiteJump/" + dirKey
+		}
+		frames := assets.AnimFrames[moveBase]
+		const fps = 30
+		moveDur := time.Duration(float64(len(frames)) / fps * float64(time.Second))
+
+		// 添加感染动画（延迟到移动动画结束后）
+		for _, inf := range infectedCoords {
+			gs.addInfectAnim(move.To, inf, player, moveDur)
+		}
+
+		// 组装音效队列
+		var seq []string
+		if player == game.PlayerA {
+			seq = append(seq, "red_split") // 红方 jump 暂时复用 split 音效
+		} else {
+			seq = append(seq, "white_jump")
+		}
+		if len(infectedCoords) > 0 {
+			if player == game.PlayerA {
+				seq = append(seq, "red_capture_white_before", "red_capture_white_after")
+			} else {
+				seq = append(seq, "white_capture_red_before", "white_capture_red_after")
+			}
+		}
+		seq = append(seq, "all_capture_after")
+
+		// 延迟播放音效
+		time.AfterFunc(moveDur, func() { gs.audioManager.PlaySequential(seq...) })
+
+		// 返回移动动画时长
+		return moveDur, nil
+	} else { // Clone 类型
+		// 先播放移动动画
+		gs.addMoveAnim(move, player)
+
+		// 计算移动动画时长
+		dirKey := directionKey(move.From, move.To)
+		var moveBase string
+		if player == game.PlayerA {
+			moveBase = "redClone/" + dirKey
+		} else {
+			moveBase = "whiteClone/" + dirKey
+		}
+		frames := assets.AnimFrames[moveBase]
+		const fps = 30
+		moveDur := time.Duration(float64(len(frames)) / fps * float64(time.Second))
+
+		// 延迟执行 MakeMove 和后续操作
+		time.AfterFunc(moveDur, func() {
+			// 更新棋盘状态
+			infectedCoords, undo, err := gs.state.MakeMove(move)
+			_ = undo
+			if err != nil {
+				fmt.Println("MakeMove error:", err)
+				return
+			}
+
+			// 添加感染动画（无需额外延迟）
+			for _, inf := range infectedCoords {
+				gs.addInfectAnim(move.To, inf, player, 0)
+			}
+
+			// 组装音效队列
+			var seq []string
+			if player == game.PlayerA {
+				seq = append(seq, "red_split")
+			} else {
+				seq = append(seq, "white_split")
+			}
+			if len(infectedCoords) > 0 {
+				if player == game.PlayerA {
+					seq = append(seq, "red_capture_white_before", "red_capture_white_after")
+				} else {
+					seq = append(seq, "white_capture_red_before", "white_capture_red_after")
+				}
+			}
+			seq = append(seq, "all_capture_after")
+
+			// 播放音效
+			gs.audioManager.PlaySequential(seq...)
+		})
+
+		// 返回移动动画时长
+		return moveDur, nil
+	}
+}
+
+// Update 更新游戏状态
 func (gs *GameScreen) Update() error {
-	// 处理玩家输入（选中/移动）
 	gs.audioManager.Update()
+	if gs.state.GameOver {
+		return nil
+	}
+
+	// 清理已结束的动画
+	for i := 0; i < len(gs.anims); {
+		if gs.anims[i].Done {
+			gs.anims = append(gs.anims[:i], gs.anims[i+1:]...)
+			continue
+		}
+		i++
+	}
+
+	// 更新动画状态标志
+	gs.isAnimating = len(gs.anims) > 0
+
+	// AI 回合
+	if gs.aiEnabled && gs.state.CurrentPlayer == game.PlayerB {
+		if time.Now().Before(gs.aiDelayUntil) {
+			return nil
+		}
+		if move, ok := game.FindBestMove(gs.state.Board, game.PlayerB); ok {
+			if total, err := gs.performMove(move, game.PlayerB); err == nil {
+				gs.aiDelayUntil = time.Now().Add(total)
+			}
+		}
+		gs.selected = nil
+		return nil
+	}
+
+	// 人类回合
 	gs.handleInput()
 	return nil
 }
-
-//func (gs *GameScreen) Update() error {
-//	gs.audioManager.Update()
-//	if gs.state.GameOver {
-//		return nil
-//	}
-//
-//	//dt := time.Duration(1e9 / 30) // 每帧 1/30 s
-//	for i := 0; i < len(gs.anims); {
-//		if gs.anims[i].Done {
-//			gs.anims = append(gs.anims[:i], gs.anims[i+1:]...)
-//			continue
-//		}
-//		i++
-//	}
-//	// AI 回合
-//	if gs.state.CurrentPlayer == game.PlayerB {
-//		// 1) 如果还在延时中，先啥都不干
-//		if time.Now().Before(gs.aiDelayUntil) {
-//			return nil
-//		}
-//
-//		// 2) 组音效队列
-//		move, ok := game.FindBestMove(gs.state.Board, game.PlayerB)
-//		if ok {
-//			infected, err := gs.state.MakeMove(move)
-//			if err == nil {
-//				gs.addMoveAnim(move, game.PlayerB)
-//				var seq []string
-//				total := time.Duration(0)
-//
-//				// 分裂/跳跃
-//				if move.IsClone() {
-//					seq = append(seq, "white_split")
-//					total += soundDurations["white_split"]
-//				} else {
-//					seq = append(seq, "white_jump")
-//					total += soundDurations["white_jump"]
-//				}
-//
-//				// 吃子前后
-//				if infected > 0 {
-//					for _, n := range gs.state.Board.Neighbors(move.To) {
-//						if gs.state.Board.Get(n) == game.PlayerB { // 被转成己方
-//							gs.addInfectAnim(move.To, n, game.PlayerB)
-//						}
-//					}
-//
-//					seq = append(seq, "white_capture_red_before")
-//					total += soundDurations["white_capture_red_before"]
-//
-//					seq = append(seq, "white_capture_red_after")
-//					total += soundDurations["white_capture_red_after"]
-//				}
-//
-//				// 完成后还能加个 all_capture_after
-//				seq = append(seq, "all_capture_after")
-//				total += soundDurations["all_capture_after"]
-//
-//				// 最后加一点缓冲
-//				total += 50 * time.Millisecond
-//
-//				// 3) 播放队列并设置下一次 AI 延时
-//				gs.audioManager.PlaySequential(seq...)
-//				gs.aiDelayUntil = time.Now().Add(total)
-//			}
-//		}
-//
-//		gs.selected = nil
-//		return nil
-//	}
-//
-//	// 人类回合
-//	gs.handleInput()
-//	return nil
-//}
 
 // Draw 每帧渲染：先清空背景，再绘制棋盘与棋子
 func (gs *GameScreen) Draw(screen *ebiten.Image) {

@@ -2,6 +2,7 @@
 package game
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"runtime"
@@ -48,8 +49,8 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	}
 	r := float64(empties) / float64(len(coords))
 	// --- 开局极早期强制只克隆 ---
-	const earlyCloneThresh = 0.84 // 当空位 ≥90%，视为开局极早期
-	//fmt.Println(r)
+	const earlyCloneThresh = 0.76 // 当空位 ≥90%，视为开局极早期
+	fmt.Println(r)
 	if r >= earlyCloneThresh {
 		var clones []Move
 		for _, m := range moves {

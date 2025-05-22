@@ -4,7 +4,6 @@ import (
 	"flag"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
-
 	"hexxagon_go/internal/ui"
 	"log"
 )

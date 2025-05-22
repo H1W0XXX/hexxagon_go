@@ -38,6 +38,31 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	const depth = 4
 	const inf = 1 << 30
 
+	// 1) 计算空位比例 r
+	coords := b.AllCoords()
+	empties := 0
+	for _, c := range coords {
+		if b.Get(c) == Empty {
+			empties++
+		}
+	}
+	r := float64(empties) / float64(len(coords))
+	// --- 开局极早期强制只克隆 ---
+	const earlyCloneThresh = 0.84 // 当空位 ≥90%，视为开局极早期
+	//fmt.Println(r)
+	if r >= earlyCloneThresh {
+		var clones []Move
+		for _, m := range moves {
+			if m.IsClone() {
+				clones = append(clones, m)
+			}
+		}
+		if len(clones) > 0 {
+			moves = clones
+		}
+		// 若没有任何克隆走法（理论极少发生），则保留原 moves（跳跃也行）
+	}
+
 	// ---------- 1) 走法粗评分（真实 evaluate） ----------
 	type scored struct {
 		mv    Move
@@ -85,19 +110,40 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	wg.Wait()
 	close(resCh)
 
-	// ---------- 3) 汇总最佳 ----------
+	// ---------- 3) 汇总最佳 + ε–贪心同分支 ----------
 	bestScore := -inf
+	secondScore := -inf
 	var bestMoves []Move
+
 	for r := range resCh {
-		if r.score > bestScore {
-			bestScore, bestMoves = r.score, []Move{r.mv}
-		} else if r.score == bestScore {
+		score := r.score
+
+		// 如果当前分数高于 bestScore，更新 bestScore 和 secondScore
+		if score > bestScore {
+			secondScore = bestScore
+			bestScore = score
+			bestMoves = []Move{r.mv}
+
+			// 如果当前分数介于 secondScore 和 bestScore 之间，更新 secondScore
+		} else if score > secondScore && score < bestScore {
+			secondScore = score
+
+			// 如果刚好等于 bestScore，就加入候选列表
+		} else if score == bestScore {
 			bestMoves = append(bestMoves, r.mv)
 		}
 	}
-	// 随机同分支
-	choice := bestMoves[rand.Intn(len(bestMoves))]
+
+	// 默认选最优手
+	choice := bestMoves[0]
+
+	// 当存在多手同分，且差距 < ε（这里用 2 分作阈值）时，随机挑一手
+	if len(bestMoves) > 1 && bestScore-secondScore < 2 {
+		choice = bestMoves[rand.Intn(len(bestMoves))]
+	}
+
 	return choice, true
+
 }
 
 // ------------------------------------------------------------

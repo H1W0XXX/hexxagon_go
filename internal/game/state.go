@@ -108,7 +108,7 @@ func (gs *GameState) checkGameOver() {
 	if emptyCount == 0 || countA == 0 || countB == 0 || (noMovesA && noMovesB) {
 		gs.GameOver = true
 		// 最终统计一次分数
-		gs.updateScores()
+		// gs.updateScores()
 
 		// 判断胜利者
 		switch {

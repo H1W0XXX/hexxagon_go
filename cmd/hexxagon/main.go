@@ -2,12 +2,13 @@ package main
 
 import (
 	"flag"
-	"log"
-
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"hexxagon_go/internal/ui"
+	"log"
+	"net/http"
 )
+import _ "net/http/pprof"
 
 func main() {
 	const (
@@ -36,10 +37,13 @@ func main() {
 	ebiten.SetTPS(30)
 	ebiten.SetWindowSize(screenW*ScreenScale, screenH*ScreenScale)
 	ebiten.SetWindowTitle("Hexxagon")
-
+	go func() {
+		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
+	}()
 	if err := ebiten.RunGame(screen); err != nil {
 		log.Fatal(err)
 	}
+
 }
 
 // go build -ldflags="-s -w" -gcflags="all=-trimpath=${PWD}" -asmflags="all=-trimpath=${PWD}" -o hexAI.exe .\cmd\hexxagon\main.go

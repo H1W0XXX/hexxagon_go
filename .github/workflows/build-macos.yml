@@ -24,9 +24,9 @@ jobs:
       - name: Build macOS executable
         run: |
           mkdir -p dist
-          go build -o dist/hexxagon ./cmd/hexxagon/main.go
+          go build -o dist/hexxagon_mac ./cmd/hexxagon/main.go
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/hexxagon
+          files: dist/hexxagon_mac

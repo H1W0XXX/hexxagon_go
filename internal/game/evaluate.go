@@ -102,7 +102,8 @@ func evaluate(b *Board, player CellState) int {
 		return best
 	}
 	infDiff := maxInf(player) - maxInf(op)
-
+	//fmt.Printf("[DEBUG] r=%.3f pieceW=%d jumpW=%d\n",
+	//	r, pieceW, jumpW)
 	// 7) 合并加权
 	// 这里只用 pieceW；在 pickMove 中可以额外用 jumpW 区分跳跃
 	return pieceDiff*pieceW +

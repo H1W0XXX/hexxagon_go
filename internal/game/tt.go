@@ -6,36 +6,45 @@ import (
 	"sync"
 )
 
-// ---------- Zobrist 随机键 ----------
-var zKey = struct {
-	mu   sync.RWMutex
-	cell map[HexCoord][4]uint64
-}{
-	cell: make(map[HexCoord][4]uint64, 256),
+// ------------------------------------------------------------
+//  Zobrist 随机键（预生成 + 零锁查询）
+// ------------------------------------------------------------
+
+// 如果你的棋盘最大半径固定，填在这里；否则可暴露为变量或在 initZobrist 里计算。
+const maxRadius = 3 // ★根据实际棋盘大小调整
+
+var (
+	zobristCell     [][4]uint64      // 下标 → 4 个状态随机数
+	hexCoordToIndex map[HexCoord]int // 坐标 → 下标
+	onceZobristInit sync.Once
+)
+
+// init 在程序启动时执行一次，生成所有随机键。
+func init() {
+	initZobrist()
 }
 
+// initZobrist 预生成 maxRadius 棋盘内所有格子的 Zobrist 键。
+func initZobrist() {
+	onceZobristInit.Do(func() {
+		coords := AllCoords(maxRadius)                        // 所有格子
+		zobristCell = make([][4]uint64, len(coords))          // len = 总格子数
+		hexCoordToIndex = make(map[HexCoord]int, len(coords)) // 映射
+		for i, c := range coords {
+			hexCoordToIndex[c] = i
+			zobristCell[i] = [4]uint64{
+				rand.Uint64(), rand.Uint64(), rand.Uint64(), rand.Uint64(),
+			}
+		}
+	})
+}
+
+// zobristKey 直接数组查表，0 锁、0 原子操作。
 func zobristKey(c HexCoord, s CellState) uint64 {
-	// 先无锁读
-	zKey.mu.RLock()
-	k, ok := zKey.cell[c]
-	zKey.mu.RUnlock()
-	if ok {
-		return k[s]
-	}
-
-	// 双检：不存在时才加写锁生成
-	zKey.mu.Lock()
-	// 可能别的线程刚写完，再检查一次
-	if k, ok = zKey.cell[c]; !ok {
-		k = [4]uint64{rand.Uint64(), rand.Uint64(), rand.Uint64(), rand.Uint64()}
-		zKey.cell[c] = k
-	}
-	zKey.mu.Unlock()
-	return k[s]
+	return zobristCell[hexCoordToIndex[c]][s]
 }
 
-// 计算整盘哈希；为简单 CPU→内存换，直接整盘 XOR。
-// 后续想再抠性能，可做“增量哈希”(Make/Unmake)。
+// hashBoard 计算整盘哈希（全盘 XOR）。
 func hashBoard(b *Board) uint64 {
 	var h uint64
 	for coord, state := range b.cells {
@@ -46,9 +55,11 @@ func hashBoard(b *Board) uint64 {
 	return h
 }
 
-// ---------- 置换表 ----------
+// ------------------------------------------------------------
+//  置换表（Transposition Table）
+// ------------------------------------------------------------
 
-const ttSize = 1 << 22 // 4 M entry (≈96 MB)
+const ttSize = 1 << 23 // 4 M entries ≈ 200 MB
 const ttMask = ttSize - 1
 
 type ttFlag uint8
@@ -60,21 +71,21 @@ const (
 )
 
 type ttEntry struct {
-	key     uint64 // 高 64 bit 哈希
-	score   int32  // αβ 得分
-	depth   int16  // 搜索深度
+	key     uint64 // 哈希
+	score   int32  // αβ 分值
+	depth   int16  // 深度
 	flag    ttFlag // 界类型
-	bestIdx uint8
+	bestIdx uint8  // 根节点最佳着（可选）
 }
 
-// 直接用切片代替 map：速度更高，占内存可控。
-var ttTable = make([]ttEntry, ttSize)
-
-var ttMu [256]sync.Mutex // 分片锁：低开销，冲突少
+var (
+	ttTable = make([]ttEntry, ttSize) // 切片比 map 更快
+	ttMu    [256]sync.Mutex           // 分片锁（若需并发写更安全，可选）
+)
 
 func lockFor(hash uint64) *sync.Mutex { return &ttMu[hash&255] }
 
-// probeTT 返回 (hit, score, flag)
+// probeTT - 查询置换表，返回 (命中, 分值, flag)。
 func probeTT(hash uint64, depth int) (bool, int, ttFlag) {
 	e := ttTable[hash&ttMask]
 	if e.key == hash && int(e.depth) >= depth {
@@ -83,7 +94,7 @@ func probeTT(hash uint64, depth int) (bool, int, ttFlag) {
 	return false, 0, 0
 }
 
-// storeTT 把新结果写回；若槽已被占，用深度更大的替换（简单策略）
+// storeTT - 写回置换表；以“深度更深者优先”策略覆盖。
 func storeTT(hash uint64, depth, score int, flag ttFlag) {
 	idx := hash & ttMask
 	if int(ttTable[idx].depth) <= depth {
@@ -106,7 +117,7 @@ func probeBestIdx(hash uint64) (bool, uint8) {
 
 func storeBestIdx(hash uint64, idx uint8) {
 	e := &ttTable[hash&ttMask]
-	if e.key == hash { // 仅限同一哈希
-		e.bestIdx = idx // 覆盖即可
+	if e.key == hash { // 仅写同槽
+		e.bestIdx = idx
 	}
 }

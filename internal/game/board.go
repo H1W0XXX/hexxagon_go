@@ -1,7 +1,9 @@
+// File game/board.go
 package game
 
 import (
 	"errors"
+	"sync"
 )
 
 // CellState represents the state of a cell on the board.
@@ -32,6 +34,53 @@ type Board struct {
 	radius int
 	cells  map[HexCoord]CellState
 	hash   uint64
+}
+
+var boardPool = sync.Pool{
+	New: func() any {
+		return &Board{}
+	},
+}
+
+var coordsCache = map[int][]HexCoord{} // 支持多半径
+
+func AllCoords(radius int) []HexCoord {
+	if coords, ok := coordsCache[radius]; ok {
+		return coords
+	}
+	var result []HexCoord
+	for q := -radius; q <= radius; q++ {
+		for r := -radius; r <= radius; r++ {
+			if abs(q)+abs(r)+abs(-q-r) <= 2*radius {
+				result = append(result, HexCoord{q, r})
+			}
+		}
+	}
+	coordsCache[radius] = result
+	return result
+}
+
+func acquireBoard(radius int) *Board {
+	b := boardPool.Get().(*Board)
+	b.radius = radius
+	// 只分配一份 cells，如果已有就复用
+	if b.cells == nil {
+		b.cells = make(map[HexCoord]CellState, len(AllCoords(radius)))
+	} else {
+		for k := range b.cells {
+			delete(b.cells, k)
+		}
+	}
+	b.hash = 0
+	return b
+}
+
+func releaseBoard(b *Board) {
+	// 可选：清理 map 里的数据
+	for k := range b.cells {
+		delete(b.cells, k)
+	}
+	boardPool.Put(b)
 }
 
 func (b *Board) set(c HexCoord, s CellState) {
@@ -97,14 +146,18 @@ func (b *Board) Neighbors(c HexCoord) []HexCoord {
 	return result
 }
 
-// AllCoords returns a slice of all coordinates on the board.
 func (b *Board) AllCoords() []HexCoord {
-	coords := make([]HexCoord, 0, len(b.cells))
-	for c := range b.cells {
-		coords = append(coords, c)
-	}
-	return coords
+	return AllCoords(b.radius)
 }
+
+// AllCoords returns a slice of all coordinates on the board.
+//func (b *Board) AllCoords() []HexCoord {
+//	coords := make([]HexCoord, 0, len(b.cells))
+//	for c := range b.cells {
+//		coords = append(coords, c)
+//	}
+//	return coords
+//}
 
 // abs returns the absolute value of x.
 func abs(x int) int {
@@ -115,17 +168,26 @@ func abs(x int) int {
 }
 
 // Clone 返回当前棋盘的深拷贝，用于 AI 模拟走子
+//
+//	func (b *Board) Clone() *Board {
+//		// 新建一个 cells map，并复制所有格子状态
+//		newCells := make(map[HexCoord]CellState, len(b.cells))
+//		for coord, state := range b.cells {
+//			newCells[coord] = state
+//		}
+//		// 返回一个新的 Board 实例
+//		return &Board{
+//			radius: b.radius,
+//			cells:  newCells,
+//		}
+//	}
 func (b *Board) Clone() *Board {
-	// 新建一个 cells map，并复制所有格子状态
-	newCells := make(map[HexCoord]CellState, len(b.cells))
+	nb := acquireBoard(b.radius)
 	for coord, state := range b.cells {
-		newCells[coord] = state
+		nb.cells[coord] = state
 	}
-	// 返回一个新的 Board 实例
-	return &Board{
-		radius: b.radius,
-		cells:  newCells,
-	}
+	nb.hash = b.hash
+	return nb
 }
 
 func (b *Board) applyMove(m Move, player CellState) (infected int, undo func()) {

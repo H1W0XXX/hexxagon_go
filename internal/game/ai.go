@@ -19,6 +19,16 @@ func init() {
 // ------------------------------------------------------------
 // 公共入口
 // ------------------------------------------------------------
+func cloneBoardPool(b *Board) *Board {
+	nb := acquireBoard(b.radius)
+	// 复制 cells
+	for c, s := range b.cells {
+		nb.cells[c] = s
+	}
+	nb.hash = b.hash
+	return nb
+}
+
 func FindBestMove(b *Board, player CellState) (Move, bool) {
 	moves := GenerateMoves(b, player)
 	if len(moves) == 0 {
@@ -28,23 +38,27 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	const depth = 4
 	const inf = 1 << 30
 
-	// ---------- 1) 走法粗评分 ----------
+	// ---------- 1) 走法粗评分（真实 evaluate） ----------
 	type scored struct {
 		mv    Move
 		score int
 	}
 	order := make([]scored, 0, len(moves))
-	for _, m := range moves {
-		cnt, _ := m.ApplyPreview(b, player) // 仍可用旧的预估
-		gain := cnt
-		if m.IsClone() {
-			gain++
-		}
-		order = append(order, scored{m, gain})
-	}
-	sort.Slice(order, func(i, j int) bool { return order[i].score > order[j].score })
 
-	// ---------- 2) 并行根节点 ----------
+	for _, m := range moves {
+		// 用对象池克隆
+		nb := cloneBoardPool(b)
+		_, _ = m.Apply(nb, player)
+		sc := evaluate(nb, player)
+		releaseBoard(nb) // 成对释放
+		order = append(order, scored{m, sc})
+	}
+	// 按 evaluate 排序，分数高的优先
+	sort.Slice(order, func(i, j int) bool {
+		return order[i].score > order[j].score
+	})
+
+	// ---------- 2) 并行根节点 α–β 搜索 ----------
 	type result struct {
 		mv    Move
 		score int
@@ -52,20 +66,18 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	resCh := make(chan result, len(order))
 	var wg sync.WaitGroup
 
-	alphaRoot := -inf
-	betaRoot := inf
+	alphaRoot, betaRoot := -inf, inf
 
 	for _, item := range order {
 		wg.Add(1)
 		go func(it scored) {
 			defer wg.Done()
-
-			nb := b.Clone()                   // 根节点仍做一次深拷贝
-			_, _ = it.mv.MakeMove(nb, player) // ⭐ 用 MakeMove 代替 Apply
-			// MakeMove 已自动更新 nb.hash
-
+			// 一样用对象池克隆
+			nb := cloneBoardPool(b)
+			_, _ = it.mv.MakeMove(nb, player)
 			score := alphaBeta(nb, nb.hash,
 				Opponent(player), player, depth-1, alphaRoot, betaRoot)
+			releaseBoard(nb)
 
 			resCh <- result{it.mv, score}
 		}(item)
@@ -77,13 +89,13 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	bestScore := -inf
 	var bestMoves []Move
 	for r := range resCh {
-		switch {
-		case r.score > bestScore:
+		if r.score > bestScore {
 			bestScore, bestMoves = r.score, []Move{r.mv}
-		case r.score == bestScore:
+		} else if r.score == bestScore {
 			bestMoves = append(bestMoves, r.mv)
 		}
 	}
+	// 随机同分支
 	choice := bestMoves[rand.Intn(len(bestMoves))]
 	return choice, true
 }
@@ -138,12 +150,20 @@ func alphaBeta(
 
 	if current == original { // 极大化
 		for i, m := range moves {
-			nb := b.Clone()
+			nb := acquireBoard(b.radius) // 用对象池获取新棋盘
+			// 复制当前棋盘
+			for coord, state := range b.cells {
+				nb.cells[coord] = state
+			}
+			nb.hash = b.hash
+
 			_, _ = m.Apply(nb, current)
 			childHash := hashBoard(nb)
 
 			score := alphaBeta(nb, childHash,
 				Opponent(current), original, depth-1, alpha, beta)
+
+			releaseBoard(nb) // 递归结束后回收
 
 			if score > best {
 				best = score
@@ -157,12 +177,19 @@ func alphaBeta(
 	} else { // 极小化
 		best = math.MaxInt32
 		for i, m := range moves {
-			nb := b.Clone()
+			nb := acquireBoard(b.radius)
+			for coord, state := range b.cells {
+				nb.cells[coord] = state
+			}
+			nb.hash = b.hash
+
 			_, _ = m.Apply(nb, current)
 			childHash := hashBoard(nb)
 
 			score := alphaBeta(nb, childHash,
 				Opponent(current), original, depth-1, alpha, beta)
+
+			releaseBoard(nb)
 
 			if score < best {
 				best = score
@@ -186,7 +213,7 @@ func alphaBeta(
 		flag = ttExact
 	}
 	storeTT(hash, depth, best, flag) // 分值
-	storeBestIdx(hash, bestIdx)      // 额外存根节点最佳着，函数见 tt.go
+	storeBestIdx(hash, bestIdx)      // 额外存根节点最佳着
 
 	return best
 }

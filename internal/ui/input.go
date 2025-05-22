@@ -77,9 +77,12 @@ func pixelToAxial(fx, fy float64, board *game.Board, tileImg *ebiten.Image) (gam
 
 // handleInput 处理鼠标点击事件，用于选中、移动并播放音效
 func (gs *GameScreen) handleInput() {
+	// 只处理鼠标左键刚按下事件
 	if !inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
 		return
 	}
+
+	// 将屏幕坐标转为棋盘坐标
 	mx, my := ebiten.CursorPosition()
 	coord, ok := pixelToAxial(float64(mx), float64(my), gs.state.Board, gs.tileImage)
 	if !ok {
@@ -88,8 +91,9 @@ func (gs *GameScreen) handleInput() {
 	}
 
 	player := gs.state.CurrentPlayer
+
+	// 还没选中任何棋子，负责选中逻辑
 	if gs.selected == nil {
-		// 仅负责选中，不再做走子相关逻辑
 		if gs.state.Board.Get(coord) == player {
 			gs.selected = &coord
 			gs.audioManager.Play("select_piece")
@@ -99,9 +103,12 @@ func (gs *GameScreen) handleInput() {
 		return
 	}
 
+	// 准备落子
 	move := game.Move{From: *gs.selected, To: coord}
-	if total, err := gs.performMove(move, player); err != nil {
-		// 走子失败，保持原有“重新选中/取消”逻辑
+
+	// —— 新增校验：目标格必须是空的 ——
+	if gs.state.Board.Get(coord) != game.Empty {
+		// 如果点到了自己棋子，就切换选中；否则取消选中
 		if gs.state.Board.Get(coord) == player {
 			gs.selected = &coord
 			gs.audioManager.Play("select_piece")
@@ -110,7 +117,39 @@ func (gs *GameScreen) handleInput() {
 			gs.audioManager.Play("cancel_select_piece")
 		}
 		return
+	}
+
+	// —— 新增校验：六边形“立方坐标”距离只能是 1（复制）或 2（跳跃） ——
+	dq := coord.Q - gs.selected.Q
+	dr := coord.R - gs.selected.R
+	ds := -dq - dr
+	dist := math.Max(
+		math.Max(math.Abs(float64(dq)), math.Abs(float64(dr))),
+		math.Abs(float64(ds)),
+	)
+	if dist < 1 || dist > 2 {
+		if gs.state.Board.Get(coord) == player {
+			gs.selected = &coord
+			gs.audioManager.Play("select_piece")
+		} else {
+			gs.selected = nil
+			gs.audioManager.Play("cancel_select_piece")
+		}
+		return
+	}
+
+	// 校验通过，调用 performMove 真正落子
+	if total, err := gs.performMove(move, player); err != nil {
+		// 走子失败，保持“重新选中/取消”逻辑
+		if gs.state.Board.Get(coord) == player {
+			gs.selected = &coord
+			gs.audioManager.Play("select_piece")
+		} else {
+			gs.selected = nil
+			gs.audioManager.Play("cancel_select_piece")
+		}
 	} else {
+		// 成功走子，设置 AI 延迟并清空选中
 		gs.aiDelayUntil = time.Now().Add(total)
 		gs.selected = nil
 	}

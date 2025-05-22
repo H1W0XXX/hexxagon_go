@@ -39,6 +39,17 @@ func NewGameState(radius int) *GameState {
 	for _, c := range cornersB {
 		_ = b.Set(c, PlayerB)
 	}
+
+	//放置障碍物
+	centerBlocks := []HexCoord{
+		{1, 0},
+		{-1, 1},
+		{0, -1},
+	}
+	for _, c := range centerBlocks {
+		_ = b.Set(c, Blocked)
+	}
+
 	// 构造 GameState
 	gs := &GameState{
 		Board:         b,

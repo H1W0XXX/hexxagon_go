@@ -56,6 +56,9 @@ func DrawBoardAndPiecesWithHints(
 
 	// 5) 绘制棋盘底板
 	for _, c := range board.AllCoords() {
+		if board.Get(c) == game.Blocked {
+			continue // 跳过 Blocked 格子
+		}
 		drawHex(dst, tileImg, c, originX, originY, tileW, tileH, vs, scale)
 	}
 

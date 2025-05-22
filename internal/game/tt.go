@@ -27,13 +27,16 @@ func init() {
 // initZobrist 预生成 maxRadius 棋盘内所有格子的 Zobrist 键。
 func initZobrist() {
 	onceZobristInit.Do(func() {
-		coords := AllCoords(maxRadius)                        // 所有格子
-		zobristCell = make([][4]uint64, len(coords))          // len = 总格子数
-		hexCoordToIndex = make(map[HexCoord]int, len(coords)) // 映射
+		coords := AllCoords(maxRadius)
+		zobristCell = make([][4]uint64, len(coords))
+		hexCoordToIndex = make(map[HexCoord]int, len(coords))
 		for i, c := range coords {
 			hexCoordToIndex[c] = i
 			zobristCell[i] = [4]uint64{
-				rand.Uint64(), rand.Uint64(), rand.Uint64(), rand.Uint64(),
+				rand.Uint64(), // Empty
+				0,             // Blocked（写死为0，永不参与hash）
+				rand.Uint64(), // PlayerA
+				rand.Uint64(), // PlayerB
 			}
 		}
 	})

@@ -105,16 +105,16 @@ func (gs *GameState) checkGameOver() {
 	noMovesB := len(GenerateMoves(gs.Board, PlayerB)) == 0
 
 	// 结束条件：棋盘无空格，或任一方无棋子，或任一方无合法走法
-	if emptyCount == 0 || countA == 0 || countB == 0 || noMovesA || noMovesB {
+	if emptyCount == 0 || countA == 0 || countB == 0 || (noMovesA && noMovesB) {
 		gs.GameOver = true
 		// 最终统计一次分数
 		gs.updateScores()
 
 		// 判断胜利者
 		switch {
-		case countA == 0 || noMovesA:
+		case countA == 0:
 			gs.Winner = PlayerB
-		case countB == 0 || noMovesB:
+		case countB == 0:
 			gs.Winner = PlayerA
 		default:
 			if gs.ScoreA > gs.ScoreB {

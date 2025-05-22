@@ -269,7 +269,7 @@ func (gs *GameScreen) Update() error {
 
 	// AI 回合
 	if gs.aiEnabled && gs.state.CurrentPlayer == game.PlayerB {
-		if time.Now().Before(gs.aiDelayUntil) {
+		if gs.isAnimating || time.Now().Before(gs.aiDelayUntil) {
 			return nil
 		}
 		if move, ok := game.FindBestMove(gs.state.Board, game.PlayerB); ok {

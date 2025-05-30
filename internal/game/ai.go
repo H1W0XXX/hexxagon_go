@@ -29,6 +29,18 @@ func cloneBoardPool(b *Board) *Board {
 	nb.hash = b.hash
 	return nb
 }
+func cloneBoard(b *Board) *Board {
+	// 分配全新的 map，绝不复用
+	nb := &Board{
+		radius: b.radius,
+		cells:  make(map[HexCoord]CellState, len(b.cells)),
+		hash:   b.hash,
+	}
+	for c, s := range b.cells {
+		nb.cells[c] = s
+	}
+	return nb
+}
 
 func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 	ttProbeCount = 0
@@ -114,11 +126,11 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 		go func(it scored) {
 			defer wg.Done()
 			// 一样用对象池克隆
-			nb := cloneBoardPool(b)
+			nb := cloneBoard(b)
 			_, _ = it.mv.MakeMove(nb, player)
 			score := alphaBeta(nb, nb.hash,
 				Opponent(player), player, depth-1, alphaRoot, betaRoot)
-			releaseBoard(nb)
+			//releaseBoard(nb)
 
 			resCh <- result{it.mv, score}
 		}(item)
@@ -150,6 +162,16 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 		} else if score == bestScore {
 			bestMoves = append(bestMoves, r.mv)
 		}
+	}
+
+	var cloneMoves []Move
+	for _, m := range bestMoves {
+		if m.IsClone() {
+			cloneMoves = append(cloneMoves, m)
+		}
+	}
+	if len(cloneMoves) > 0 {
+		bestMoves = cloneMoves
 	}
 
 	// 默认选最优手

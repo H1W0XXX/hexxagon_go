@@ -17,6 +17,8 @@ import (
 	"hexxagon_go/internal/game"
 )
 
+var lastUpdate time.Time
+
 // AnimOffset 给每个动画 key 一个手动微调 (X, Y)，单位：像素
 var AnimOffset = map[string]struct{ X, Y float64 }{
 	// ★ 你手动调整过的
@@ -228,6 +230,17 @@ func (gs *GameScreen) performMove(move game.Move, player game.CellState) (time.D
 
 // Update 更新游戏状态
 func (gs *GameScreen) Update() error {
+
+	now := time.Now()
+	if !lastUpdate.IsZero() {
+		elapsed := now.Sub(lastUpdate)
+		targetFrameTime := time.Second / 30 // 约等于 33ms
+		if elapsed < targetFrameTime {
+			time.Sleep(targetFrameTime - elapsed) // 主动 sleep 剩余时间
+		}
+	}
+	lastUpdate = time.Now()
+
 	// 1) 更新音频
 	gs.audioManager.Update()
 	if gs.state.GameOver {

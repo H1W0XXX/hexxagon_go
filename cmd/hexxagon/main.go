@@ -10,8 +10,7 @@ import (
 	"runtime"
 )
 
-//import _ "net/http/pprof"
-
+// import _ "net/http/pprof"
 func init() {
 	if runtime.GOOS == "windows" {
 		h := windows.CurrentProcess()
@@ -47,7 +46,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ebiten.SetVsyncEnabled(false)
+	ebiten.SetVsyncEnabled(true)
 	ebiten.SetTPS(30)
 	ebiten.SetWindowSize(screenW*ScreenScale, screenH*ScreenScale)
 	ebiten.SetWindowTitle("Hexxagon")

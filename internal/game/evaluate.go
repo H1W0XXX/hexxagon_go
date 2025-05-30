@@ -10,7 +10,7 @@ var (
 
 // 加分上下限
 const (
-	CLONE_BONUS_MAX = 20
+	CLONE_BONUS_MAX = 30
 	CLONE_BONUS_MIN = 14
 	JUMP_BONUS_MAX  = 2
 	JUMP_BONUS_MIN  = 0

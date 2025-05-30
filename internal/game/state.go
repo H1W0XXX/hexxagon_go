@@ -39,6 +39,17 @@ func NewGameState(radius int) *GameState {
 	for _, c := range cornersB {
 		_ = b.Set(c, PlayerB)
 	}
+
+	//放置障碍物
+	centerBlocks := []HexCoord{
+		{1, 0},
+		{-1, 1},
+		{0, -1},
+	}
+	for _, c := range centerBlocks {
+		_ = b.Set(c, Blocked)
+	}
+
 	// 构造 GameState
 	gs := &GameState{
 		Board:         b,
@@ -68,13 +79,25 @@ func (gs *GameState) MakeMove(m Move) ([]HexCoord, undoInfo, error) {
 	if gs.GameOver {
 		return nil, undoInfo{}, errors.New("游戏已结束")
 	}
-	infectedCoords, undo := m.MakeMove(gs.Board, gs.CurrentPlayer)
+
+	// 1) 在当前玩家盘面上执行走子
+	infected, undo := m.MakeMove(gs.Board, gs.CurrentPlayer)
+	// 2) 更新分数、状态
 	gs.updateScores()
+	gs.fillEnclosedRegions()
 	gs.checkGameOver()
-	if !gs.GameOver {
-		gs.CurrentPlayer = Opponent(gs.CurrentPlayer)
+	// 3) 切换到下一执子方
+	next := Opponent(gs.CurrentPlayer)
+
+	// 4) 如果 next 无任何合法走法，就把 GameOver 置 true，不切换 CurrentPlayer
+	if len(GenerateMoves(gs.Board, next)) == 0 {
+		gs.GameOver = true
+	} else {
+		// 5) 否则正常切换
+		gs.CurrentPlayer = next
 	}
-	return infectedCoords, undo, nil
+
+	return infected, undo, nil
 }
 
 // checkGameOver 判断游戏是否结束：
@@ -105,7 +128,7 @@ func (gs *GameState) checkGameOver() {
 	noMovesB := len(GenerateMoves(gs.Board, PlayerB)) == 0
 
 	// 结束条件：棋盘无空格，或任一方无棋子，或任一方无合法走法
-	if emptyCount == 0 || countA == 0 || countB == 0 || (noMovesA && noMovesB) {
+	if emptyCount == 0 || countA == 0 || countB == 0 || noMovesA || noMovesB {
 		gs.GameOver = true
 		// 最终统计一次分数
 		// gs.updateScores()

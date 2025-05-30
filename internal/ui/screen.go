@@ -67,6 +67,7 @@ var soundDurations = map[string]time.Duration{
 	// 如果还有别的 key 也记得加上
 }
 
+const depth = 4 //人机思考步数
 const (
 	// 窗口尺寸
 	WindowWidth  = 800
@@ -75,10 +76,14 @@ const (
 	BoardRadius = 4
 )
 
+type pendingClone struct {
+	move     game.Move
+	player   game.CellState
+	execTime time.Time // 何时真正执行 MakeMove
+}
+
 // GameScreen 实现 ebiten.Game 接口，管理游戏主循环和渲染
 // selected 用于存储当前选中的源格
-// TODO: 可添加 AI 相关字段，如自动落子间隔等
-
 type GameScreen struct {
 	state       *game.GameState                  // 游戏状态
 	tileImage   *ebiten.Image                    // 棋盘格子贴图
@@ -90,9 +95,10 @@ type GameScreen struct {
 	audioManager    *assets.AudioManager
 	aiDelayUntil    time.Time
 	offscreen       *ebiten.Image
-	anims           []*FrameAnim // 正在播放的动画列表
-	aiEnabled       bool         // true=人机；false=人人
-	isAnimating     bool         // 标记是否正在播放动画
+	anims           []*FrameAnim  // 正在播放的动画列表
+	aiEnabled       bool          // true=人机；false=人人
+	isAnimating     bool          // 标记是否正在播放动画
+	pendingClone    *pendingClone // 等待执行的 Clone 动作
 }
 
 // NewGameScreen 构造并初始化游戏界面
@@ -192,11 +198,11 @@ func (gs *GameScreen) performMove(move game.Move, player game.CellState) (time.D
 
 		// 返回移动动画时长
 		return moveDur, nil
-	} else { // Clone 类型
-		// 先播放移动动画
+	} else { // —— Clone 类型 —— //
+		// 1) 先播移动动画
 		gs.addMoveAnim(move, player)
 
-		// 计算移动动画时长
+		// 2) 计算动画时长
 		dirKey := directionKey(move.From, move.To)
 		var moveBase string
 		if player == game.PlayerA {
@@ -208,54 +214,27 @@ func (gs *GameScreen) performMove(move game.Move, player game.CellState) (time.D
 		const fps = 30
 		moveDur := time.Duration(float64(len(frames)) / fps * float64(time.Second))
 
-		// 延迟执行 MakeMove 和后续操作
-		time.AfterFunc(moveDur, func() {
-			// 更新棋盘状态
-			infectedCoords, undo, err := gs.state.MakeMove(move)
-			_ = undo
-			if err != nil {
-				fmt.Println("MakeMove error:", err)
-				return
-			}
+		// 3) 把“真正落子”推迟到主线程 Update() 中执行
+		gs.pendingClone = &pendingClone{
+			move:     move,
+			player:   player,
+			execTime: time.Now().Add(moveDur),
+		}
 
-			// 添加感染动画（无需额外延迟）
-			for _, inf := range infectedCoords {
-				gs.addInfectAnim(move.To, inf, player, 0)
-			}
-
-			// 组装音效队列
-			var seq []string
-			if player == game.PlayerA {
-				seq = append(seq, "red_split")
-			} else {
-				seq = append(seq, "white_split")
-			}
-			if len(infectedCoords) > 0 {
-				if player == game.PlayerA {
-					seq = append(seq, "red_capture_white_before", "red_capture_white_after")
-				} else {
-					seq = append(seq, "white_capture_red_before", "white_capture_red_after")
-				}
-			}
-			seq = append(seq, "all_capture_after")
-
-			// 播放音效
-			gs.audioManager.PlaySequential(seq...)
-		})
-
-		// 返回移动动画时长
+		// 4) 返回动画持续时间（供 AI 延迟）
 		return moveDur, nil
 	}
 }
 
 // Update 更新游戏状态
 func (gs *GameScreen) Update() error {
+	// 1) 更新音频
 	gs.audioManager.Update()
 	if gs.state.GameOver {
 		return nil
 	}
 
-	// 清理已结束的动画
+	// 2) 清理已结束的动画
 	for i := 0; i < len(gs.anims); {
 		if gs.anims[i].Done {
 			gs.anims = append(gs.anims[:i], gs.anims[i+1:]...)
@@ -263,16 +242,48 @@ func (gs *GameScreen) Update() error {
 		}
 		i++
 	}
+	// 更新动画标志
 
-	// 更新动画状态标志
+	// 3) 延迟执行 Clone 落子（在主线程里，绝不会和 Draw 并发）
+	if pc := gs.pendingClone; pc != nil && time.Now().After(pc.execTime) {
+		// 真正更新棋盘
+		infectedCoords, _, err := gs.state.MakeMove(pc.move)
+		if err != nil {
+			fmt.Println("MakeMove error:", err)
+		} else {
+			// 播放感染动画
+			for _, inf := range infectedCoords {
+				gs.addInfectAnim(pc.move.To, inf, pc.player, 0)
+			}
+			// 播放音效
+			var seq []string
+			if pc.player == game.PlayerA {
+				seq = append(seq, "red_split")
+			} else {
+				seq = append(seq, "white_split")
+			}
+			if len(infectedCoords) > 0 {
+				if pc.player == game.PlayerA {
+					seq = append(seq, "red_capture_white_before", "red_capture_white_after")
+				} else {
+					seq = append(seq, "white_capture_red_before", "white_capture_red_after")
+				}
+			}
+			seq = append(seq, "all_capture_after")
+			gs.audioManager.PlaySequential(seq...)
+		}
+		// 清空 pendingClone
+		gs.pendingClone = nil
+	}
+
 	gs.isAnimating = len(gs.anims) > 0
 
-	// AI 回合
+	// 4) AI 回合
 	if gs.aiEnabled && gs.state.CurrentPlayer == game.PlayerB {
 		if gs.isAnimating || time.Now().Before(gs.aiDelayUntil) {
 			return nil
 		}
-		if move, ok := game.FindBestMove(gs.state.Board, game.PlayerB); ok {
+		if move, _, ok := game.IterativeDeepening(gs.state.Board, game.PlayerB, depth); ok {
 			if total, err := gs.performMove(move, game.PlayerB); err == nil {
 				gs.aiDelayUntil = time.Now().Add(total)
 			}
@@ -281,7 +292,7 @@ func (gs *GameScreen) Update() error {
 		return nil
 	}
 
-	// 人类回合
+	// 5) 人类回合
 	gs.handleInput()
 	return nil
 }

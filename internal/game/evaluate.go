@@ -5,7 +5,7 @@ package game
 var (
 	cloneThresh = 0.25      // 克隆/跳跃阈值
 	jumpThresh  = 1.0 / 3.0 // 跳跃/残局阈值
-	dangerW     = 6         // 暴露惩罚权重
+	dangerW     = 40        // 暴露惩罚权重
 )
 
 // 加分上下限
@@ -68,26 +68,12 @@ func isInOpponentRange(b *Board, c HexCoord, opponent CellState) bool {
 		}
 		for _, dir2 := range Directions {
 			nb2 := nb.Add(dir2)
-			if hexDistance(nb2, c) == 2 && b.Get(nb2) == opponent {
+			if HexDist(nb2, c) == 2 && b.Get(nb2) == opponent {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// hexDistance：计算两个坐标的六边形距离
-func hexDistance(a, b HexCoord) int {
-	dq := abs(a.Q - b.Q)
-	dr := abs(a.R - b.R)
-	ds := abs((-a.Q - a.R) - (-b.Q - b.R))
-	if dq >= dr && dq >= ds {
-		return dq
-	}
-	if dr >= ds {
-		return dr
-	}
-	return ds
 }
 
 // ApplyPreview：在不修改棋盘的情况下预览感染数
@@ -110,7 +96,7 @@ func evaluate(b *Board, player CellState) int {
 		}
 	}
 	r := float64(empties) / float64(len(coords))
-
+	edgeW := dynamicEdgeW(r)
 	// 2) 动态权重
 	pieceW := dynamicPieceW(r)
 	jumpW := dynamicJumpW(r)
@@ -119,16 +105,16 @@ func evaluate(b *Board, player CellState) int {
 	// 3) 统计棋子数、外缘、风险
 	myCnt, opCnt := 0, 0
 	outer, danger := 0, 0
-	origin := HexCoord{0, 0}
+	//origin := HexCoord{0, 0}
 	for _, c := range coords {
 		s := b.Get(c)
 		if s == Empty {
 			continue
 		}
-		d := hexDistance(c, origin)
+		onEdge := isOuter(c, b.radius)
 		if s == player {
 			myCnt++
-			if d == b.radius {
+			if onEdge {
 				outer++
 			}
 			if isInOpponentRange(b, c, op) {
@@ -136,12 +122,29 @@ func evaluate(b *Board, player CellState) int {
 			}
 		} else {
 			opCnt++
-			if d == b.radius {
+			if onEdge {
 				outer--
 			}
 		}
 	}
 
+	//hole := 0
+	//for _, c := range coords {
+	//	if b.Get(c) != Empty {
+	//		continue
+	//	}
+	//	// 空格至少有一个对手邻居
+	//	hasEnemy := false
+	//	for _, nb := range b.Neighbors(c) {
+	//		if b.Get(nb) == op {
+	//			hasEnemy = true
+	//			break
+	//		}
+	//	}
+	//	if hasEnemy {
+	//		hole++
+	//	}
+	//}
 	pieceScore := (myCnt - opCnt) * pieceW
 	safetyScore := -danger * dangerW
 
@@ -150,15 +153,77 @@ func evaluate(b *Board, player CellState) int {
 	// 5) 感染差
 	infDiff := maxInf(b, player) - maxInf(b, op)
 
+	// ---------- 6) 危险空洞惩罚 ----------
+	holeW := 10 // 每个潜在“跳入大窟窿”扣 5 分，可再调大
+	riskHoles := 0
+	for _, c := range coords {
+		if b.Get(c) != Empty {
+			continue
+		}
+		// 条件 a：对手 <= 2 格可达
+		reachable := false
+		for _, nb := range b.AllCoords() {
+			if b.Get(nb) == op && HexDist(nb, c) <= 2 {
+				reachable = true
+				break
+			}
+		}
+		if !reachable {
+			continue
+		}
+		// 条件 b：空洞周围至少 2 颗我方棋子
+		ownAdj := 0
+		for _, nb := range b.Neighbors(c) {
+			if b.Get(nb) == player {
+				ownAdj++
+			}
+		}
+		if ownAdj >= 2 {
+			riskHoles++
+		}
+	}
+	riskPenalty := -riskHoles * holeW
+
+	outerScore := outer * edgeW
+	//fmt.Printf("outer=%d outerScore=%d piece=%d mob=%d inf=%d danger=%d total=%d\n",
+	//	outer, outerScore,
+	//	pieceScore, mobDiff*jumpW, infDiff*infW, safetyScore,
+	//	pieceScore+mobDiff*jumpW+infDiff*infW+outerScore+safetyScore)
 	// 6) 最终合分
-	return pieceScore +
-		mobDiff*jumpW +
-		infDiff*infW +
-		outer +
-		safetyScore
+	return pieceScore*2 +
+		mobDiff*jumpW/2 +
+		infDiff*infW/2 +
+		outerScore +
+		safetyScore +
+		riskPenalty
 }
 
 // 对外导出
 func Evaluate(b *Board, player CellState) int {
 	return evaluate(b, player)
+}
+
+func dynamicEdgeW(r float64) int {
+	// r = 空格占比，开局 r≈1，残局 r≈0
+	if r > 0.6 {
+		return 6 // 开局大力冲边
+	} else if r > 0.3 {
+		return 3
+	}
+	return 1 // 残局趋于中性
+}
+
+func isOuter(c HexCoord, radius int) bool {
+	ring := max3(abs(c.Q), abs(c.R), abs(c.Q+c.R))
+	return ring == radius // 最外一圈
+}
+
+func outerRingCoords(b *Board) []HexCoord {
+	var ring []HexCoord
+	for _, c := range b.AllCoords() {
+		if isOuter(c, b.radius) && b.Get(c) != Blocked {
+			ring = append(ring, c)
+		}
+	}
+	return ring
 }

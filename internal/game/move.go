@@ -25,6 +25,15 @@ var jumpDirs = []HexCoord{
 	{-1, +2}, {0, +2}, {+1, +1},
 }
 
+func max3(a, b, c int) int {
+	if a < b {
+		a = b
+	}
+	if a < c {
+		a = c
+	}
+	return a
+}
 func Opponent(player CellState) CellState {
 	switch player {
 	case PlayerA:
@@ -34,6 +43,10 @@ func Opponent(player CellState) CellState {
 	}
 	return Empty
 }
+
+// ---- 判定函数 ----
+//func (m Move) IsClone() bool { return hexDist(m.From, m.To) == 1 }
+//func (m Move) IsJump() bool  { return hexDist(m.From, m.To) == 2 }
 
 // IsClone 返回这步是否是复制（复制：落点是距离 1 的相邻格子）
 func (m Move) IsClone() bool {
@@ -52,11 +65,45 @@ func (m Move) IsJump() bool {
 			return true
 		}
 	}
+	// --- 兜底：有时 jumpDirs 漏掉某方向时仍能识别 ---
+	dq := m.From.Q - m.To.Q
+	dr := m.From.R - m.To.R
+	// hex ring distance = max(|dq|, |dr|, |dq+dr|)
+	if max3(abs(dq), abs(dr), abs(dq+dr)) == 2 {
+		return true
+	}
 	return false
 }
 
-// GenerateMoves 枚举玩家 player 在棋盘 b 上所有合法走法
+func (m Move) IsJumpOld() bool {
+	for _, d := range jumpDirs {
+		if m.From.Q+d.Q == m.To.Q && m.From.R+d.R == m.To.R {
+			return true
+		}
+	}
+	return false
+}
 func GenerateMoves(b *Board, player CellState) []Move {
+	var moves []Move
+	for _, from := range b.AllCoords() {
+		if b.Get(from) != player {
+			continue
+		}
+		for _, to := range b.AllCoords() {
+			if b.Get(to) != Empty {
+				continue
+			}
+			switch HexDist(from, to) {
+			case 1, 2:
+				moves = append(moves, Move{From: from, To: to})
+			}
+		}
+	}
+	return moves
+}
+
+// GenerateMoves 枚举玩家 player 在棋盘 b 上所有合法走法
+func GenerateMovesOld(b *Board, player CellState) []Move {
 	var moves []Move
 	// 遍历所有格子
 	for _, c := range b.AllCoords() {
@@ -112,4 +159,14 @@ func (m Move) Apply(b *Board, player CellState) ([]HexCoord, error) {
 		}
 	}
 	return toBeInfected, nil
+}
+
+func HexDist(a, b HexCoord) int {
+	dq, dr := a.Q-b.Q, a.R-b.R
+	return max3(abs(dq), abs(dr), abs(dq+dr)) // ring distance
+}
+
+func IsLegalMove(from, to HexCoord) (clone, jump bool) {
+	d := HexDist(from, to)
+	return d == 1, d == 2
 }

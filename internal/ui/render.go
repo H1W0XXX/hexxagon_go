@@ -22,14 +22,16 @@ func DrawBoardAndPiecesWithHints(
 	cloneTargets := map[game.HexCoord]struct{}{}
 	jumpTargets := map[game.HexCoord]struct{}{}
 	if selected != nil {
-		moves := game.GenerateMoves(board, board.Get(*selected))
-		for _, m := range moves {
-			if m.From == *selected {
-				if m.IsClone() {
-					cloneTargets[m.To] = struct{}{}
-				} else {
-					jumpTargets[m.To] = struct{}{}
-				}
+		from := *selected
+		for _, to := range board.AllCoords() {
+			if board.Get(to) != game.Empty {
+				continue // 目的地必须是空
+			}
+			switch game.HexDist(from, to) {
+			case 1:
+				cloneTargets[to] = struct{}{}
+			case 2:
+				jumpTargets[to] = struct{}{}
 			}
 		}
 	}
@@ -56,15 +58,22 @@ func DrawBoardAndPiecesWithHints(
 
 	// 5) 绘制棋盘底板
 	for _, c := range board.AllCoords() {
+		if board.Get(c) == game.Blocked {
+			continue // 跳过 Blocked 格子
+		}
 		drawHex(dst, tileImg, c, originX, originY, tileW, tileH, vs, scale)
 	}
 
 	// 6) 先画提示：绿色=复制造型，黄色=跳跃
-	for to := range cloneTargets {
-		drawHex(dst, hintGreenImg, to, originX, originY, tileW, tileH, vs, scale)
+	for _, c := range board.AllCoords() {
+		if _, ok := cloneTargets[c]; ok {
+			drawHex(dst, hintGreenImg, c, originX, originY, tileW, tileH, vs, scale)
+		}
 	}
-	for to := range jumpTargets {
-		drawHex(dst, hintYellowImg, to, originX, originY, tileW, tileH, vs, scale)
+	for _, c := range board.AllCoords() {
+		if _, ok := jumpTargets[c]; ok {
+			drawHex(dst, hintYellowImg, c, originX, originY, tileW, tileH, vs, scale)
+		}
 	}
 
 	// 7) 最后绘制棋子

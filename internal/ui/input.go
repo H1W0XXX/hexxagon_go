@@ -95,7 +95,7 @@ func (gs *GameScreen) handleInput() {
 	// 还没选中任何棋子，负责选中逻辑
 	if gs.selected == nil {
 		if gs.state.Board.Get(coord) == player {
-			gs.selected = &coord
+			gs.selected = &game.HexCoord{Q: coord.Q, R: coord.R}
 			gs.audioManager.Play("select_piece")
 		} else {
 			gs.audioManager.Play("cancel_select_piece")
@@ -110,7 +110,7 @@ func (gs *GameScreen) handleInput() {
 	if gs.state.Board.Get(coord) != game.Empty {
 		// 如果点到了自己棋子，就切换选中；否则取消选中
 		if gs.state.Board.Get(coord) == player {
-			gs.selected = &coord
+			gs.selected = &game.HexCoord{Q: coord.Q, R: coord.R}
 			gs.audioManager.Play("select_piece")
 		} else {
 			gs.selected = nil
@@ -129,7 +129,7 @@ func (gs *GameScreen) handleInput() {
 	)
 	if dist < 1 || dist > 2 {
 		if gs.state.Board.Get(coord) == player {
-			gs.selected = &coord
+			gs.selected = &game.HexCoord{Q: coord.Q, R: coord.R}
 			gs.audioManager.Play("select_piece")
 		} else {
 			gs.selected = nil
@@ -142,7 +142,7 @@ func (gs *GameScreen) handleInput() {
 	if total, err := gs.performMove(move, player); err != nil {
 		// 走子失败，保持“重新选中/取消”逻辑
 		if gs.state.Board.Get(coord) == player {
-			gs.selected = &coord
+			gs.selected = &game.HexCoord{Q: coord.Q, R: coord.R}
 			gs.audioManager.Play("select_piece")
 		} else {
 			gs.selected = nil

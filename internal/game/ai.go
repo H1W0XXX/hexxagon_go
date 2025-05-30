@@ -2,6 +2,7 @@
 package game
 
 import (
+	//"fmt"
 	"math"
 	"math/rand"
 	"runtime"
@@ -29,13 +30,16 @@ func cloneBoardPool(b *Board) *Board {
 	return nb
 }
 
-func FindBestMove(b *Board, player CellState) (Move, bool) {
+func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
+	ttProbeCount = 0
+	ttHitCount = 0
+
 	moves := GenerateMoves(b, player)
 	if len(moves) == 0 {
 		return Move{}, false
 	}
 
-	const depth = 4
+	//const depth = 4
 	const inf = 1 << 30
 
 	// 1) 计算空位比例 r
@@ -48,19 +52,29 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	}
 	r := float64(empties) / float64(len(coords))
 	// --- 开局极早期强制只克隆 ---
-	const earlyCloneThresh = 0.84 // 当空位 ≥90%，视为开局极早期
+	const earlyCloneThresh = 0.76 // 当空位 ≥90%，视为开局极早期
+	const earlyCloneThresh2 = 0.82
 	//fmt.Println(r)
-	if r >= earlyCloneThresh {
-		var clones []Move
+	if r >= earlyCloneThresh2 {
+		// 开局早期：只保留“外圈克隆”走法
+		var edgeClones []Move
 		for _, m := range moves {
-			if m.IsClone() {
-				clones = append(clones, m)
+			if m.IsClone() && isOuter(m.To, b.radius) {
+				edgeClones = append(edgeClones, m)
 			}
 		}
-		if len(clones) > 0 {
+		// 如果确实有外圈克隆，就用它们；否则保留所有克隆
+		if len(edgeClones) > 0 {
+			moves = edgeClones
+		} else {
+			var clones []Move
+			for _, m := range moves {
+				if m.IsClone() {
+					clones = append(clones, m)
+				}
+			}
 			moves = clones
 		}
-		// 若没有任何克隆走法（理论极少发生），则保留原 moves（跳跃也行）
 	}
 
 	// ---------- 1) 走法粗评分（真实 evaluate） ----------
@@ -68,21 +82,23 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 		mv    Move
 		score int
 	}
-	order := make([]scored, 0, len(moves))
+	order := make([]scored, len(moves))
 
-	for _, m := range moves {
-		// 用对象池克隆
-		nb := cloneBoardPool(b)
-		_, _ = m.Apply(nb, player)
-		sc := evaluate(nb, player)
-		releaseBoard(nb) // 成对释放
-		order = append(order, scored{m, sc})
+	for i, m := range moves {
+		cnt, _ := m.ApplyPreview(b, player) // 只算感染数，快
+		order[i] = scored{m, cnt}
 	}
-	// 按 evaluate 排序，分数高的优先
-	sort.Slice(order, func(i, j int) bool {
-		return order[i].score > order[j].score
-	})
 
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].score != order[j].score {
+			return order[i].score > order[j].score // 感染多的先
+		}
+		// 同感染数：Clone 先、Jump 后
+		if order[i].mv.IsClone() != order[j].mv.IsClone() {
+			return order[i].mv.IsClone() // Clone=true 放前面
+		}
+		return false
+	})
 	// ---------- 2) 并行根节点 α–β 搜索 ----------
 	type result struct {
 		mv    Move
@@ -109,7 +125,9 @@ func FindBestMove(b *Board, player CellState) (Move, bool) {
 	}
 	wg.Wait()
 	close(resCh)
-
+	probes, hits, rate := GetTTStats()
+	_, _, _ = probes, hits, rate
+	//fmt.Printf("TT probes: %d, hits: %d, hit rate: %.2f%%\n", probes, hits, rate)
 	// ---------- 3) 汇总最佳 + ε–贪心同分支 ----------
 	bestScore := -inf
 	secondScore := -inf
@@ -155,11 +173,16 @@ func alphaBeta(
 	current, original CellState,
 	depth, alpha, beta int,
 ) int {
-	if depth == 0 {
-		return evaluate(b, original)
+	// 生成所有走子
+	moves := GenerateMoves(b, current)
+	// 1) 叶节点或无走子：写表后直接返回
+	if depth == 0 || len(moves) == 0 {
+		val := evaluate(b, original)
+		storeTT(hash, depth, val, ttExact)
+		return val
 	}
 
-	// ---------- 置换表探测 ----------
+	// 2) 置换表探测
 	if hit, val, flag := probeTT(hash, depth); hit {
 		switch flag {
 		case ttExact:
@@ -177,90 +200,94 @@ func alphaBeta(
 			return val
 		}
 	}
-	alphaOrig := alpha // 用于写表判定
+	alphaOrig := alpha
+	betaOrig := beta
 
-	moves := GenerateMoves(b, current)
-	if len(moves) == 0 {
-		return evaluate(b, original)
+	// 3) PV-Move 排序：注意这里先把 ok、idx 顺序写对
+	if ok, idx := probeBestIdx(hash); ok {
+		i := int(idx)
+		if i < len(moves) {
+			moves[0], moves[i] = moves[i], moves[0]
+		}
 	}
 
-	// 走法排序：感染数降序
-	sort.Slice(moves, func(i, j int) bool {
-		ci, _ := moves[i].ApplyPreview(b, current)
-		cj, _ := moves[j].ApplyPreview(b, current)
-		return ci > cj
-	})
+	var best int
+	var bestIdx uint8
 
-	best := math.MinInt32
-	bestIdx := uint8(0)
-
-	if current == original { // 极大化
+	if current == original {
+		// 极大化节点
+		best = math.MinInt32
 		for i, m := range moves {
-			nb := acquireBoard(b.radius) // 用对象池获取新棋盘
-			// 复制当前棋盘
-			for coord, state := range b.cells {
-				nb.cells[coord] = state
+			nb := acquireBoard(b.radius)
+			// 手动复制 cells
+			for coord, st := range b.cells {
+				nb.cells[coord] = st
 			}
-			nb.hash = b.hash
+			// 增量哈希：从父哈希 xor 掉走子前后
+			childHash := hash ^
+				zobristKey(m.From, current) ^
+				zobristKey(m.To, current)
 
 			_, _ = m.Apply(nb, current)
-			childHash := hashBoard(nb)
-
 			score := alphaBeta(nb, childHash,
-				Opponent(current), original, depth-1, alpha, beta)
-
-			releaseBoard(nb) // 递归结束后回收
+				Opponent(current), original,
+				depth-1, alpha, beta)
+			releaseBoard(nb)
 
 			if score > best {
 				best = score
 				bestIdx = uint8(i)
 			}
-			alpha = max(alpha, best)
-			if beta <= alpha {
-				break // β 剪枝
+			if score > alpha {
+				alpha = score
+			}
+			if alpha >= beta {
+				break
 			}
 		}
-	} else { // 极小化
+	} else {
+		// 极小化节点
 		best = math.MaxInt32
 		for i, m := range moves {
 			nb := acquireBoard(b.radius)
-			for coord, state := range b.cells {
-				nb.cells[coord] = state
+			for coord, st := range b.cells {
+				nb.cells[coord] = st
 			}
-			nb.hash = b.hash
+			childHash := hash ^
+				zobristKey(m.From, current) ^
+				zobristKey(m.To, current)
 
 			_, _ = m.Apply(nb, current)
-			childHash := hashBoard(nb)
-
 			score := alphaBeta(nb, childHash,
-				Opponent(current), original, depth-1, alpha, beta)
-
+				Opponent(current), original,
+				depth-1, alpha, beta)
 			releaseBoard(nb)
 
 			if score < best {
 				best = score
 				bestIdx = uint8(i)
 			}
-			beta = min(beta, best)
+			if score < beta {
+				beta = score
+			}
 			if beta <= alpha {
-				break // α 剪枝
+				break
 			}
 		}
 	}
 
-	// ---------- 写回置换表 ----------
+	// 4) 写回置换表
 	var flag ttFlag
 	switch {
 	case best <= alphaOrig:
 		flag = ttUpper
-	case best >= beta:
+	case best >= betaOrig:
 		flag = ttLower
 	default:
 		flag = ttExact
 	}
-	storeTT(hash, depth, best, flag) // 分值
-	storeBestIdx(hash, bestIdx)      // 额外存根节点最佳着
-
+	storeTT(hash, depth, best, flag)
+	storeBestIdx(hash, bestIdx)
 	return best
 }
 
@@ -279,5 +306,32 @@ func min(a, b int) int {
 }
 
 func DeepSearch(b *Board, hash uint64, side CellState, depth int) int {
+
 	return alphaBeta(b, hash, side, side, depth, -32000, 32000)
+}
+
+func IterativeDeepening(
+	root *Board,
+	player CellState,
+	maxDepth int,
+) (best Move, bestScore int, ok bool) {
+
+	// 用于存上一层 PV 走法的哈希 → bestIdx
+	pvMove := make(map[uint64]uint8)
+
+	for depth := 1; depth <= maxDepth; depth++ {
+		// 把上一层保存的 PV-Move 写进 TT，供排序
+		for h, idx := range pvMove {
+			storeBestIdx(h, idx)
+		}
+		// 调用已有的并行根节点搜索
+		mv, hit := FindBestMoveAtDepth(root, player, depth)
+		if !hit {
+			break // 无合法走法
+		}
+		// 记录本层 PV-Move：根节点 hash → idx=0
+		pvMove[root.hash] = 0
+		best, bestScore, ok = mv, 0, true // 根节点时 score 在内部已比较
+	}
+	return
 }

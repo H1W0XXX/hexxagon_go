@@ -2,8 +2,10 @@
 package game
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 )
 
 // ------------------------------------------------------------
@@ -27,13 +29,16 @@ func init() {
 // initZobrist 预生成 maxRadius 棋盘内所有格子的 Zobrist 键。
 func initZobrist() {
 	onceZobristInit.Do(func() {
-		coords := AllCoords(maxRadius)                        // 所有格子
-		zobristCell = make([][4]uint64, len(coords))          // len = 总格子数
-		hexCoordToIndex = make(map[HexCoord]int, len(coords)) // 映射
+		coords := AllCoords(maxRadius)
+		zobristCell = make([][4]uint64, len(coords))
+		hexCoordToIndex = make(map[HexCoord]int, len(coords))
 		for i, c := range coords {
 			hexCoordToIndex[c] = i
 			zobristCell[i] = [4]uint64{
-				rand.Uint64(), rand.Uint64(), rand.Uint64(), rand.Uint64(),
+				rand.Uint64(), // Empty
+				0,             // Blocked（写死为0，永不参与hash）
+				rand.Uint64(), // PlayerA
+				rand.Uint64(), // PlayerB
 			}
 		}
 	})
@@ -79,16 +84,23 @@ type ttEntry struct {
 }
 
 var (
+	ttProbeCount uint64 // 总 probe 次数
+	ttHitCount   uint64 // 命中次数
+)
+
+var (
 	ttTable = make([]ttEntry, ttSize) // 切片比 map 更快
 	ttMu    [256]sync.Mutex           // 分片锁（若需并发写更安全，可选）
 )
 
 func lockFor(hash uint64) *sync.Mutex { return &ttMu[hash&255] }
 
-// probeTT - 查询置换表，返回 (命中, 分值, flag)。
+// probeTT 只做累加，不打印
 func probeTT(hash uint64, depth int) (bool, int, ttFlag) {
+	ttProbeCount++
 	e := ttTable[hash&ttMask]
 	if e.key == hash && int(e.depth) >= depth {
+		ttHitCount++
 		return true, int(e.score), e.flag
 	}
 	return false, 0, 0
@@ -120,4 +132,39 @@ func storeBestIdx(hash uint64, idx uint8) {
 	if e.key == hash { // 仅写同槽
 		e.bestIdx = idx
 	}
+}
+
+// 调用结束后，打印或获取命中率
+func GetTTStats() (probes, hits uint64, hitRate float64) {
+	probes = atomic.LoadUint64(&ttProbeCount)
+	hits = atomic.LoadUint64(&ttHitCount)
+	if probes == 0 {
+		hitRate = 0
+	} else {
+		hitRate = float64(hits) / float64(probes) * 100
+	}
+	return
+}
+
+// 例如在搜索结束后调用：
+func PrintTTStats() {
+	probes, hits, rate := GetTTStats()
+	fmt.Printf("TT probes: %d, hits: %d, hit rate: %.2f%%\n", probes, hits, rate)
+}
+
+// RunSearch 是你最外层启动搜索的函数（改成你自己的名字）
+func RunSearch(b *Board, player CellState, depth int) int {
+	// 重置计数
+	ttProbeCount = 0
+	ttHitCount = 0
+
+	// 调用已有的 DeepSearch（你原来是：alphaBeta(b, b.hash, side, side,...)）
+	score := DeepSearch(b, b.hash, player, depth)
+
+	// 只在这里打印一次
+	probes, hits, rate := GetTTStats()
+	fmt.Printf("TT probes: %d, hits: %d, hit rate: %.2f%%\n",
+		probes, hits, rate)
+
+	return score
 }

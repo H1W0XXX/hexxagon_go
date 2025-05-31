@@ -97,8 +97,11 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 	order := make([]scored, len(moves))
 
 	for i, m := range moves {
-		cnt, _ := m.ApplyPreview(b, player) // 只算感染数，快
-		order[i] = scored{m, cnt}
+		nb := cloneBoard(b) // 手工新分配
+		m.MakeMove(nb, player)
+		score := evaluateStatic(nb, player)
+		// 没有 releaseBoard(nb)
+		order[i] = scored{m, score}
 	}
 
 	sort.Slice(order, func(i, j int) bool {
@@ -130,7 +133,7 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 			_, _ = it.mv.MakeMove(nb, player)
 			score := alphaBeta(nb, nb.hash,
 				Opponent(player), player, depth-1, alphaRoot, betaRoot)
-			//releaseBoard(nb)
+			releaseBoard(nb)
 
 			resCh <- result{it.mv, score}
 		}(item)
@@ -177,8 +180,8 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 	// 默认选最优手
 	choice := bestMoves[0]
 
-	// 当存在多手同分，且差距 < ε（这里用 2 分作阈值）时，随机挑一手
-	if len(bestMoves) > 1 && bestScore-secondScore < 2 {
+	// 当存在多手同分，且差距 < ε（这里用 1 分作阈值）时，随机挑一手
+	if len(bestMoves) > 1 && bestScore-secondScore < 1 {
 		choice = bestMoves[rand.Intn(len(bestMoves))]
 	}
 
@@ -189,22 +192,29 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 // ------------------------------------------------------------
 // α-β + 置换表
 // ------------------------------------------------------------
+func mMakeMoveWithUndo(b *Board, mv Move, player CellState) undoInfo {
+	infected, u := mv.MakeMove(b, player)
+	// infected 可以用于播放动画或分析，但对搜索本身不需要特别处理
+	_ = infected
+	return u
+}
 func alphaBeta(
 	b *Board,
 	hash uint64,
 	current, original CellState,
 	depth, alpha, beta int,
 ) int {
-	// 生成所有走子
+	// 1) 生成所有走法
 	moves := GenerateMoves(b, current)
-	// 1) 叶节点或无走子：写表后直接返回
+
+	// 2) 叶节点或无走子：直接评估，并写入置换表
 	if depth == 0 || len(moves) == 0 {
-		val := evaluate(b, original)
+		val := evaluateStatic(b, original)
 		storeTT(hash, depth, val, ttExact)
 		return val
 	}
 
-	// 2) 置换表探测
+	// 3) 置换表探测
 	if hit, val, flag := probeTT(hash, depth); hit {
 		switch flag {
 		case ttExact:
@@ -225,7 +235,7 @@ func alphaBeta(
 	alphaOrig := alpha
 	betaOrig := beta
 
-	// 3) PV-Move 排序：注意这里先把 ok、idx 顺序写对
+	// 4) PV-Move 排序：如果置换表里有记录的最佳走法索引，把它交换到 moves[0]
 	if ok, idx := probeBestIdx(hash); ok {
 		i := int(idx)
 		if i < len(moves) {
@@ -233,31 +243,57 @@ func alphaBeta(
 		}
 	}
 
-	var best int
+	var bestScore int
 	var bestIdx uint8
 
+	// 5) 根据是“极大化节点”还是“极小化节点”分别处理
 	if current == original {
-		// 极大化节点
-		best = math.MinInt32
-		for i, m := range moves {
-			nb := acquireBoard(b.radius)
-			// 手动复制 cells
-			for coord, st := range b.cells {
-				nb.cells[coord] = st
+		bestScore = math.MinInt32
+		for i, mv := range moves {
+			// 先保存"父节点的hash"
+			origHash := b.hash
+
+			// 计算 childHash：先把 from/to/感染全部 xor 掉、再 xor 进新状态
+			childHash := origHash
+			// ① 把 from(原来是current) xor 掉
+			childHash ^= zobristKey(mv.From, current)
+			// ② 如果是 Jump，把 from→Empty
+			if mv.IsJump() {
+				childHash ^= zobristKey(mv.From, Empty)
 			}
-			// 增量哈希：从父哈希 xor 掉走子前后
-			childHash := hash ^
-				zobristKey(m.From, current) ^
-				zobristKey(m.To, current)
+			// ③ 把 to(原来是Empty) xor 掉
+			childHash ^= zobristKey(mv.To, Empty)
+			// ④ 把 to→current
+			childHash ^= zobristKey(mv.To, current)
+			// ⑤ 感染格：foreach n in b.Neighbors(mv.To) { if b.Get(n)==Opponent(current) {
+			//         childHash ^= zobristKey(n, Opponent(current));
+			//         childHash ^= zobristKey(n, current);
+			//     }
+			// }
+			for _, n := range b.Neighbors(mv.To) {
+				if b.Get(n) == Opponent(current) {
+					childHash ^= zobristKey(n, Opponent(current))
+					childHash ^= zobristKey(n, current)
+				}
+			}
 
-			_, _ = m.Apply(nb, current)
-			score := alphaBeta(nb, childHash,
-				Opponent(current), original,
-				depth-1, alpha, beta)
-			releaseBoard(nb)
+			// 让 b.hash 也同步修改到 childHash
+			b.hash = childHash
 
-			if score > best {
-				best = score
+			// 真正执行 MakeMove，并记录 undo
+			undo := mMakeMoveWithUndo(b, mv, current)
+
+			// 递归下去
+			score := alphaBeta(b, childHash, Opponent(current), original, depth-1, alpha, beta)
+
+			// 回溯：先把棋盘内容恢复
+			b.UnmakeMove(undo)
+			// 再把 b.hash 恢复
+			b.hash = origHash
+
+			// 更新 bestScore / α / 剪枝
+			if score > bestScore {
+				bestScore = score
 				bestIdx = uint8(i)
 			}
 			if score > alpha {
@@ -269,24 +305,29 @@ func alphaBeta(
 		}
 	} else {
 		// 极小化节点
-		best = math.MaxInt32
-		for i, m := range moves {
-			nb := acquireBoard(b.radius)
-			for coord, st := range b.cells {
-				nb.cells[coord] = st
-			}
+		bestScore = math.MaxInt32
+		for i, mv := range moves {
+			// 同样要增量更新哈希
 			childHash := hash ^
-				zobristKey(m.From, current) ^
-				zobristKey(m.To, current)
+				zobristKey(mv.From, current) ^
+				zobristKey(mv.To, Empty)
+			if mv.IsJump() {
+				childHash = childHash ^ zobristKey(mv.From, current) ^ zobristKey(mv.From, Empty)
+			}
+			childHash = childHash ^ zobristKey(mv.To, Empty) ^ zobristKey(mv.To, current)
 
-			_, _ = m.Apply(nb, current)
-			score := alphaBeta(nb, childHash,
-				Opponent(current), original,
-				depth-1, alpha, beta)
-			releaseBoard(nb)
+			// 执行落子并记录 undo
+			undo := mMakeMoveWithUndo(b, mv, current)
 
-			if score < best {
-				best = score
+			// 递归
+			score := alphaBeta(b, childHash, Opponent(current), original, depth-1, alpha, beta)
+
+			// 回溯
+			b.UnmakeMove(undo)
+
+			// 更新 best, beta, 剪枝
+			if score < bestScore {
+				bestScore = score
 				bestIdx = uint8(i)
 			}
 			if score < beta {
@@ -298,19 +339,19 @@ func alphaBeta(
 		}
 	}
 
-	// 4) 写回置换表
+	// 6) 写回置换表
 	var flag ttFlag
 	switch {
-	case best <= alphaOrig:
+	case bestScore <= alphaOrig:
 		flag = ttUpper
-	case best >= betaOrig:
+	case bestScore >= betaOrig:
 		flag = ttLower
 	default:
 		flag = ttExact
 	}
-	storeTT(hash, depth, best, flag)
+	storeTT(hash, depth, bestScore, flag)
 	storeBestIdx(hash, bestIdx)
-	return best
+	return bestScore
 }
 
 // ------------------------------------------------------------

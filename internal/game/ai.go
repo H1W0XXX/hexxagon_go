@@ -29,6 +29,9 @@ func cloneBoardPool(b *Board) *Board {
 	nb.hash = b.hash
 	return nb
 }
+
+const jumpMovePenalty = 25
+
 func cloneBoard(b *Board) *Board {
 	// 分配全新的 map，绝不复用
 	nb := &Board{
@@ -65,7 +68,7 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 	r := float64(empties) / float64(len(coords))
 	// --- 开局极早期强制只克隆 ---
 	const earlyCloneThresh = 0.76 // 当空位 ≥90%，视为开局极早期
-	const earlyCloneThresh2 = 0.82
+	const earlyCloneThresh2 = 0.76
 	//fmt.Println(r)
 	if r >= earlyCloneThresh2 {
 		// 开局早期：只保留“外圈克隆”走法
@@ -204,6 +207,17 @@ func alphaBeta(
 	current, original CellState,
 	depth, alpha, beta int,
 ) int {
+	// ———— 新增 —— 在函数开头，先计算空位比例 r，用于判断是否处于“开局前期” ————
+	coords := b.AllCoords()
+	empties := 0
+	for _, c := range coords {
+		if b.Get(c) == Empty {
+			empties++
+		}
+	}
+	r := float64(empties) / float64(len(coords))
+	// ————————————————————————————————————————————————————————————————
+
 	// 1) 生成所有走法
 	moves := GenerateMoves(b, current)
 
@@ -248,22 +262,42 @@ func alphaBeta(
 
 	// 5) 根据是“极大化节点”还是“极小化节点”分别处理
 	if current == original {
+		// === MAX 节点 ===
 		bestScore = math.MinInt32
 		for i, mv := range moves {
-			// 先保存"父节点的hash"
+			// ———— 新增 —— 对“开局前期非感染跳跃”进行惩罚 ——
+			if r >= openingPhaseThresh && mv.IsJump() {
+				infected := previewInfectedCount(b, mv, current)
+				if infected == 0 {
+					// 非感染跳跃，罚分
+					score := math.MinInt32 / 2
+					// 更新 bestScore / alpha
+					if score > bestScore {
+						bestScore = score
+						bestIdx = uint8(i)
+					}
+					if score > alpha {
+						alpha = score
+					}
+					continue
+				}
+			}
+			// ——————————————————————————————————————————————
+
+			// 先保存“父节点的 hash”
 			origHash := b.hash
 
 			// 计算 childHash：先把 from/to/感染全部 xor 掉、再 xor 进新状态
 			childHash := origHash
-			// ① 把 from(原来是current) xor 掉
+			// ① 把 from(原来是 current) xor 掉
 			childHash ^= zobristKey(mv.From, current)
 			// ② 如果是 Jump，把 from→Empty
 			if mv.IsJump() {
 				childHash ^= zobristKey(mv.From, Empty)
 			}
-			// ③ 把 to(原来是Empty) xor 掉
+			// ③ 把 to(原来是 Empty) xor 掉
 			childHash ^= zobristKey(mv.To, Empty)
-			// ④ 把 to→current
+			// ④ 把 to→ current
 			childHash ^= zobristKey(mv.To, current)
 			// ⑤ 感染格：foreach n in b.Neighbors(mv.To) { if b.Get(n)==Opponent(current) {
 			//         childHash ^= zobristKey(n, Opponent(current));
@@ -291,6 +325,10 @@ func alphaBeta(
 			// 再把 b.hash 恢复
 			b.hash = origHash
 
+			if mv.IsJump() {
+				score -= jumpMovePenalty
+			}
+
 			// 更新 bestScore / α / 剪枝
 			if score > bestScore {
 				bestScore = score
@@ -300,13 +338,17 @@ func alphaBeta(
 				alpha = score
 			}
 			if alpha >= beta {
+				// 触发 β-剪枝，直接跳出
 				break
 			}
 		}
 	} else {
-		// 极小化节点
+		// === MIN 节点 ===
 		bestScore = math.MaxInt32
 		for i, mv := range moves {
+			// 如果你只想给 MAX 侧惩罚，那么这里可以不做任何改动；否则下面也可以照着 MAX 的做法—给 MIN 侧的“非感染跳跃”一个很高的分数，使 MIN 不愿意选它。
+			// 通常我们只对 MAX 侧进行“非感染跳跃惩罚”，所以这里不加惩罚判断——保持原样即可。
+
 			// 同样要增量更新哈希
 			childHash := hash ^
 				zobristKey(mv.From, current) ^
@@ -325,7 +367,12 @@ func alphaBeta(
 			// 回溯
 			b.UnmakeMove(undo)
 
-			// 更新 best, beta, 剪枝
+			if mv.IsJump() {
+				// 由于 MIN 节点是在找最小 score，所以想让它不喜欢跳，就给它加一个很大的正分：
+				score += jumpMovePenalty
+			}
+
+			// 更新 best, β, 剪枝
 			if score < bestScore {
 				bestScore = score
 				bestIdx = uint8(i)
@@ -334,6 +381,7 @@ func alphaBeta(
 				beta = score
 			}
 			if beta <= alpha {
+				// 触发 α-剪枝
 				break
 			}
 		}

@@ -16,6 +16,24 @@ const (
 	JUMP_BONUS_MIN  = 0
 )
 
+// ========== 新增部分：加权感染数与开局惩罚常量 ==========
+const (
+	// 开局阶段阈值：当空位比例 r ≥ 0.82 时，视为“开局”
+	openingPhaseThresh = 0.82
+	// 开局被对手感染时的额外惩罚权重
+	openingPenaltyWeight = 10
+
+	// 跳跃感染权重（跳跃感染得分较低）
+	jumpInfWeight = 1
+	// 克隆感染权重（克隆感染得分较高）
+	cloneInfWeight = 2
+
+	// ========= 新增 =========
+	// 如果处于开局阶段(r ≥ openingPhaseThresh)，且我方存在可用克隆却没有使用克隆，
+	// 那么静态评估扣分（值可以根据调试再微调）
+	earlyJumpPenalty = 20
+)
+
 // HexCoord.Add：方便邻格计算
 func (h HexCoord) Add(o HexCoord) HexCoord {
 	return HexCoord{h.Q + o.Q, h.R + o.R}
@@ -124,15 +142,29 @@ func evaluateStatic(b *Board, player CellState) int {
 		}
 	}
 	r := float64(empties) / float64(len(coords))
-	edgeW := dynamicEdgeW(r)
 
-	// 2) 动态权重
+	// 2) 如果处于“开局前期”（r ≥ openingPhaseThresh），并且对手棋子数比自己多，就严重惩罚
+	myCnt, opCnt := 0, 0
+	for _, c := range coords {
+		s := b.Get(c)
+		if s == player {
+			myCnt++
+		} else if s == op {
+			opCnt++
+		}
+	}
+	openingPenalty := 0
+	if r >= openingPhaseThresh && opCnt > myCnt {
+		openingPenalty = (opCnt - myCnt) * openingPenaltyWeight
+	}
+
+	// 3) 动态权重计算
+	edgeW := dynamicEdgeW(r)
 	pieceW := dynamicPieceW(r)
 	jumpW := dynamicJumpW(r)
 	infW := dynamicInfW(r)
 
-	// 3) 统计棋子数、外缘、风险
-	myCnt, opCnt := 0, 0
+	// 4) 统计棋子数、外缘数量、危险数量
 	outer, danger := 0, 0
 	for _, c := range coords {
 		s := b.Get(c)
@@ -141,7 +173,6 @@ func evaluateStatic(b *Board, player CellState) int {
 		}
 		onEdge := isOuter(c, b.radius)
 		if s == player {
-			myCnt++
 			if onEdge {
 				outer++
 			}
@@ -149,42 +180,95 @@ func evaluateStatic(b *Board, player CellState) int {
 				danger++
 			}
 		} else {
-			opCnt++
 			if onEdge {
-				outer--
+				outer-- // 对手在边缘计负分
 			}
 		}
 	}
+
+	// 5) “机动性差”改为只统计 克隆 走法（mobCloneDiff），而不是 所有 走法
+	//
+	//    这样开局阶段 r ≥ openingPhaseThresh 时，会只关心“克隆”的数量，
+	//    如果对手有更多可用克隆，也会被扣分；反之我方有更多可用克隆会加分。
+	myMoves := GenerateMoves(b, player)
+	opMoves := GenerateMoves(b, op)
+
+	// 只统计 克隆 走法 数量
+	myCloneCount := 0
+	for _, m := range myMoves {
+		if m.IsClone() {
+			myCloneCount++
+		}
+	}
+	opCloneCount := 0
+	for _, m := range opMoves {
+		if m.IsClone() {
+			opCloneCount++
+		}
+	}
+	cloneMobDiff := myCloneCount - opCloneCount
+
+	// 如果不在开局阶段，则仍旧用“克隆+跳跃”之和做机动性差
+	fullMobDiff := len(myMoves) - len(opMoves)
+
+	// 6) “加权感染差”（infDiffWeighted）：对“跳跃感染”打低分，对“克隆感染”打高分
+	infDiffWeighted := maxWeightedInfFromMoves(b, player, myMoves) -
+		maxWeightedInfFromMoves(b, op, opMoves)
+
+	// 7) “早期跳跃惩罚”：如果 r ≥ openingPhaseThresh，且我方存在可用克隆（myCloneCount>0），
+	//    但静态评价中还是让 jump 得分部分占比很高（也就是说实际局面没有感染产生），
+	//    就额外扣掉一笔 earlyJumpPenalty。
+	//
+	//    具体判断方式：只要开局阶段 r ≥ openingPhaseThresh && myCloneCount > 0 && infDiffWeighted == 0，
+	//    说明“有克隆可以感染，却没有任何感染量（infDiffWeighted 为 0）”，
+	//    那很可能就是 AI 那一步选择了“跳跃”而不感染，强行把棋子移到更远位置去。
+	//    因此给出一次额外惩罚，让 AI 更倾向于用克隆去感染。
+	earlyJumpCost := 0
+	if r >= openingPhaseThresh && myCloneCount > 0 && infDiffWeighted == 0 {
+		earlyJumpCost = earlyJumpPenalty
+	}
+
+	// 8) 边缘分
+	outerScore := outer * edgeW
+
+	// 9) 危险空洞惩罚
+	holesPenalty := -evaluateHoles(b, player)
+
+	// 10) 组合最终得分，把“开局被感染惩罚”和“早期跳跃惩罚”都扣掉
+	//
+	//     - infection 部分用 infDiffWeighted * infW
+	//     - mobility 在开局阶段用 cloneMobDiff、其他阶段用 fullMobDiff
+	//     - pieceScore = (我方棋子数 – 对手棋子数) * pieceW
+	//     - safetyScore = - danger * dangerW
 	pieceScore := (myCnt - opCnt) * pieceW
 	safetyScore := -danger * dangerW
 
-	// 4) 机动性差（mobDiff）
-	myMoves := GenerateMoves(b, player)
-	opMoves := GenerateMoves(b, op)
-	mobDiff := len(myMoves) - len(opMoves)
+	// 根据是否跨过开局阶段来决定用哪个 mobility 差值
+	mobScore := 0
+	if r >= openingPhaseThresh {
+		mobScore = cloneMobDiff * jumpW / 3
+	} else {
+		mobScore = fullMobDiff * jumpW / 3
+	}
 
-	// 5) 感染差（infDiff），用缓存下来的 myMoves/opMoves 快速计算
-	infDiff := maxInfFromMoves(b, player, myMoves) - maxInfFromMoves(b, op, opMoves)
+	finalScore :=
+		pieceScore*2 +
+			mobScore +
+			infDiffWeighted*infW/2 +
+			outerScore +
+			safetyScore +
+			holesPenalty -
+			openingPenalty -
+			earlyJumpCost
 
-	// 6) 边缘分
-	outerScore := outer * edgeW
-
-	// 7) 危险空洞惩罚
-	holesPenalty := -evaluateHoles(b, player)
-
-	// 8) 最终综合打分
-	return pieceScore*2 +
-		mobDiff*jumpW/3 +
-		infDiff*infW/2 +
-		outerScore +
-		safetyScore +
-		holesPenalty
+	return finalScore
 }
 
 func maxInfFromMoves(b *Board, pl CellState, moves []Move) int {
 	best := 0
 	for _, m := range moves {
-		if cnt, _ := m.ApplyPreview(b, pl); cnt > best {
+		cnt := previewInfectedCount(b, m, pl)
+		if cnt > best {
 			best = cnt
 		}
 	}
@@ -273,4 +357,36 @@ func evaluateHoles(b *Board, player CellState) int {
 	}
 
 	return holePenalty
+}
+
+// maxWeightedInfFromMoves：在不修改棋盘情况下，计算“加权”后的最大感染数
+func maxWeightedInfFromMoves(b *Board, pl CellState, moves []Move) int {
+	best := 0
+	for _, m := range moves {
+		// 直接数邻居感染数，无需克隆棋盘
+		cnt := previewInfectedCount(b, m, pl)
+
+		// 跳跃感染权重为 jumpInfWeight，克隆感染乘以 cloneInfWeight
+		if m.IsJump() {
+			cnt = cnt * jumpInfWeight
+		} else {
+			cnt = cnt * cloneInfWeight
+		}
+		if cnt > best {
+			best = cnt
+		}
+	}
+	return best
+}
+
+// “预览”一次感染数，而不实际修改棋盘
+func previewInfectedCount(b *Board, mv Move, player CellState) int {
+	count := 0
+	for _, dir := range Directions {
+		nb := mv.To.Add(dir)
+		if b.Get(nb) == Opponent(player) {
+			count++
+		}
+	}
+	return count
 }

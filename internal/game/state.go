@@ -166,15 +166,18 @@ func (gs *GameState) MakeMove(m Move) ([]HexCoord, undoInfo, error) {
 		case gs.ScoreA > gs.ScoreB:
 			gs.Winner = PlayerA
 			fmt.Printf("玩家 A: %d 个棋子，玩家 B: %d 个棋子\n", gs.ScoreA, gs.ScoreB)
-			fmt.Println("玩家 A 获胜！")
+			fmt.Printf("Player A: %d pieces, Player B: %d pieces\n", gs.ScoreA, gs.ScoreB)
+			fmt.Println("玩家 A 获胜！ / Player A wins!")
 		case gs.ScoreB > gs.ScoreA:
 			gs.Winner = PlayerB
 			fmt.Printf("玩家 A: %d 个棋子，玩家 B: %d 个棋子\n", gs.ScoreA, gs.ScoreB)
-			fmt.Println("玩家 B 获胜！")
+			fmt.Printf("Player A: %d pieces, Player B: %d pieces\n", gs.ScoreA, gs.ScoreB)
+			fmt.Println("玩家 B 获胜！ / Player B wins!")
 		default:
 			gs.Winner = Empty // 平局
 			fmt.Printf("玩家 A: %d 个棋子，玩家 B: %d 个棋子\n", gs.ScoreA, gs.ScoreB)
-			fmt.Println("平局！")
+			fmt.Printf("Player A: %d pieces, Player B: %d pieces\n", gs.ScoreA, gs.ScoreB)
+			fmt.Println("平局！ / It's a tie!")
 		}
 		return infected, undo, nil
 	}

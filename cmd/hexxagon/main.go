@@ -4,14 +4,12 @@ import (
 	"flag"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
-	"golang.org/x/sys/windows"
 	"hexxagon_go/internal/ui"
 	"log"
-	"runtime"
 )
 
 // import _ "net/http/pprof"
-//
+
 //	func init() {
 //		if runtime.GOOS == "windows" {
 //			h := windows.CurrentProcess()

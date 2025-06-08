@@ -34,6 +34,13 @@ const (
 	earlyJumpPenalty = 20
 )
 
+const (
+	// 中期阶段阈值：当空位比例 r < 0.5 时视为“中期”
+	midgamePhaseThresh = 0.6
+	// 中期阶段，对手上一步周边位置权重
+	midgameLastMoveWeight = 15
+)
+
 // HexCoord.Add：方便邻格计算
 func (h HexCoord) Add(o HexCoord) HexCoord {
 	return HexCoord{h.Q + o.Q, h.R + o.R}
@@ -261,6 +268,15 @@ func evaluateStatic(b *Board, player CellState) int {
 			openingPenalty -
 			earlyJumpCost
 
+	// —— 仅此新增：中期对手上一步周边加权 ——
+	if r < midgamePhaseThresh {
+		for _, dir := range Directions {
+			nb := b.LastMove.To.Add(dir)
+			if b.Get(nb) == Empty {
+				finalScore += midgameLastMoveWeight
+			}
+		}
+	}
 	return finalScore
 }
 
@@ -275,36 +291,26 @@ func maxInfFromMoves(b *Board, pl CellState, moves []Move) int {
 	return best
 }
 
+// evaluateHoles 评估空洞区域被对手跳入的惩罚
 func evaluateHoles(b *Board, player CellState) int {
 	op := Opponent(player)
+	// 记录已访问空格
 	visited := make(map[HexCoord]bool)
 	holePenalty := 0
-	holeWeight := 5 // 你可以视情况调大或调小
+	holeWeight := 5 // 空洞区域被对手跳入即惩罚，可调
 
+	// 遍历所有空格，找到未访问的空洞区域
 	for _, start := range b.AllCoords() {
-		// 只关心还没访问的、而且是空的那个点
 		if b.Get(start) != Empty || visited[start] {
 			continue
 		}
-
-		// 用 BFS 把从 start 开始的整个连通空洞区域都找出来
+		// BFS 收集连通空洞
 		queue := []HexCoord{start}
 		region := []HexCoord{start}
 		visited[start] = true
-
-		touchesBorder := false // 如果连通区域能连到“棋盘边缘”，我们可以选择不惩罚它
-		// （或者你想只惩罚内侧空洞，就把 touchesBorder=true 当作“不是封闭空洞”：不扣分）
-
 		for len(queue) > 0 {
 			cur := queue[0]
 			queue = queue[1:]
-
-			// 判断是否连到最外圈(单纯作为示例，可以不判断)
-			if abs(cur.Q) == b.radius || abs(cur.R) == b.radius || abs(cur.Q+cur.R) == b.radius {
-				touchesBorder = true
-			}
-
-			// 扫描该点四周相邻的空格
 			for _, nb := range b.Neighbors(cur) {
 				if !visited[nb] && b.Get(nb) == Empty {
 					visited[nb] = true
@@ -314,48 +320,31 @@ func evaluateHoles(b *Board, player CellState) int {
 			}
 		}
 
-		// 如果整个区域连到棋盘外缘，你也可以不惩罚，或者惩罚更少。
-		// 这里我们假设：只惩罚不连边缘的“内侧空洞”。
-		if touchesBorder {
-			continue
-		}
-
-		// 至此，region 就是一整片连通的“空洞”。
-		// 接下来要判断：对手有没有可能 1 步或者 2 步进入 region 中的某一个空格。
-		// 如果对手从某个己方棋子位置出发，在 <=2 步内能跳到 region 里的某个格子，
-		// 那就说明这个空洞对对手是“可乘之机”，我们就要按 size 扣分。
-
-		regionSize := len(region) // 先记录区域大小
-		opponentCanReach := false
-
-		// 把对手所有棋子的位置先搜到一个切片里：
-		var oppPositions []HexCoord
+		// 收集对手棋子位置
+		oppPositions := make([]HexCoord, 0)
 		for _, c := range b.AllCoords() {
 			if b.Get(c) == op {
 				oppPositions = append(oppPositions, c)
 			}
 		}
 
-		// 对每个空洞中的点，都检查它和所有对手棋子之间的距离，
-		// 只要发现有一个对手棋子 d<=2，就认为“对手可达”
-		for _, holeCell := range region {
+		// 如果对手能在1或2步内进入该区域，则惩罚此区域大小
+		opponentCanReach := false
+		for _, cell := range region {
 			if opponentCanReach {
 				break
 			}
 			for _, opp := range oppPositions {
-				if HexDist(opp, holeCell) <= 2 {
+				if HexDist(opp, cell) <= 2 {
 					opponentCanReach = true
 					break
 				}
 			}
 		}
-
 		if opponentCanReach {
-			// 按区域大小 * 权重来惩罚
-			holePenalty += regionSize * holeWeight
+			holePenalty += len(region) * holeWeight
 		}
 	}
-
 	return holePenalty
 }
 

@@ -4,6 +4,9 @@ package ui
 import (
 	"fmt"
 	"github.com/hajimehoshi/ebiten/v2/audio"
+	"github.com/hajimehoshi/ebiten/v2/text"
+	"golang.org/x/image/font/basicfont"
+
 	//"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"strings"
 
@@ -18,6 +21,8 @@ import (
 )
 
 var lastUpdate time.Time
+
+var fontFace = basicfont.Face7x13
 
 // AnimOffset 给每个动画 key 一个手动微调 (X, Y)，单位：像素
 var AnimOffset = map[string]struct{ X, Y float64 }{
@@ -101,19 +106,38 @@ type GameScreen struct {
 	aiEnabled       bool          // true=人机；false=人人
 	isAnimating     bool          // 标记是否正在播放动画
 	pendingClone    *pendingClone // 等待执行的 Clone 动作
+
+	mode               string // "pve", "pvp", "replay"
+	lastAdvance        time.Time
+	replayDelay        time.Duration
+	replayMi, replaySi int
+	replayMatches      []ReplayMatch
+
+	ui         UIState
+	showScores bool
+}
+
+type ReplayStep struct {
+	Move game.Move `json:"move"`
+}
+
+type ReplayMatch struct {
+	Winner string       `json:"winner"`
+	Steps  []ReplayStep `json:"steps"`
 }
 
 // NewGameScreen 构造并初始化游戏界面
-func NewGameScreen(ctx *audio.Context, aiEnabled bool) (*GameScreen, error) {
-
+func NewGameScreen(ctx *audio.Context, aiEnabled, showScores bool) (*GameScreen, error) {
 	var err error
 	gs := &GameScreen{
 		state:       game.NewGameState(BoardRadius),
 		pieceImages: make(map[game.CellState]*ebiten.Image),
 		aiEnabled:   aiEnabled,
-		//audioManager: audioManager,
+		showScores:  showScores, // ← 新增
+		ui:          UIState{},  // 初始化 UIState
 	}
 
+	// 加载贴图
 	if gs.tileImage, err = assets.LoadImage("hex_space"); err != nil {
 		return nil, err
 	}
@@ -130,9 +154,17 @@ func NewGameScreen(ctx *audio.Context, aiEnabled bool) (*GameScreen, error) {
 		return nil, err
 	}
 
+	// 如果启动时就要显示评分，先计算一次
+	if gs.showScores {
+		gs.refreshMoveScores()
+	}
+
+	// 初始化音频管理器
 	if gs.audioManager, err = assets.NewAudioManager(ctx); err != nil {
 		return nil, fmt.Errorf("初始化音频管理器失败: %w", err)
 	}
+
+	// 画板缓冲
 	gs.offscreen = ebiten.NewImage(WindowWidth, WindowHeight)
 	return gs, nil
 }
@@ -230,7 +262,6 @@ func (gs *GameScreen) performMove(move game.Move, player game.CellState) (time.D
 
 // Update 更新游戏状态
 func (gs *GameScreen) Update() error {
-
 	now := time.Now()
 	if !lastUpdate.IsZero() {
 		elapsed := now.Sub(lastUpdate)
@@ -330,7 +361,29 @@ func (gs *GameScreen) Draw(screen *ebiten.Image) {
 	)
 
 	boardScale, originX, originY, tileW, tileH, vs := getBoardTransform(gs.tileImage)
-	_ = tileH
+
+	// —— 新增：把评分画到每个目标格的中心 ——
+	if gs.showScores {
+		for to, score := range gs.ui.MoveScores {
+			// 1) 计算格子在 offscreen 上的像素中心（未缩放、未平移）
+			cx := (float64(to.Q)+BoardRadius)*tileW*0.75 + tileW/2
+			cy := (float64(to.R)+BoardRadius+float64(to.Q)/2)*vs + tileH/2
+
+			// 2) 应用缩放和平移，得到最终绘制位置
+			px := originX + cx*boardScale
+			py := originY + cy*boardScale
+
+			// 3) 格式化分数，选颜色
+			str := fmt.Sprintf("%.1f", score)
+			clr := color.RGBA{0x20, 0xFF, 0x20, 0xFF} // 绿色
+			if score < 0 {
+				clr = color.RGBA{0xFF, 0x60, 0x60, 0xFF} // 负分红色
+			}
+
+			// 4) 画字（-10, +4 是为了让文本大致居中）
+			text.Draw(gs.offscreen, str, fontFace, int(px)-10, int(py)+4, clr)
+		}
+	}
 	//fmt.Println(gs.anims)
 	for _, a := range gs.anims {
 		img := a.Current()

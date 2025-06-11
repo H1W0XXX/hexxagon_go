@@ -12,6 +12,7 @@
 # 忽略 IDEA 的项目配置文件
 .idea/
 AIdata/
+
 # 忽略系统文件
 .DS_Store
 Thumbs.db
@@ -19,3 +20,7 @@ Thumbs.db
 # 忽略其他临时文件
 *.log
 *.ps1
+
+selfplayData/
+*.csv
+*.json

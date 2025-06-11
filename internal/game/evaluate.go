@@ -1,6 +1,25 @@
 // file: internal/game/evaluate.go
 package game
 
+import "math"
+
+// 你从训练结果里抄过来的
+var learnedW = []float64{
+	-0.15342230,
+	-0.05578179,
+	-0.00084953,
+	0.08653770,
+	0.02525369,
+	-0.00093363,
+	0.00704528,
+	-0.00498269,
+	0.02515402,
+	-0.00310400,
+	0.09628337,
+}
+
+const learnedB = -1.8162169456481934
+
 // 可调参数
 var (
 	cloneThresh = 0.25      // 克隆/跳跃阈值
@@ -12,7 +31,7 @@ var (
 const (
 	CLONE_BONUS_MAX = 30
 	CLONE_BONUS_MIN = 14
-	JUMP_BONUS_MAX  = 2
+	JUMP_BONUS_MAX  = 3
 	JUMP_BONUS_MIN  = 0
 )
 
@@ -31,7 +50,14 @@ const (
 	// ========= 新增 =========
 	// 如果处于开局阶段(r ≥ openingPhaseThresh)，且我方存在可用克隆却没有使用克隆，
 	// 那么静态评估扣分（值可以根据调试再微调）
-	earlyJumpPenalty = 20
+	earlyJumpPenalty = 1
+)
+
+const (
+	// 中期阶段阈值：当空位比例 r < 0.5 时视为“中期”
+	midgamePhaseThresh = 0.6
+	// 中期阶段，对手上一步周边位置权重
+	midgameLastMoveWeight = 15
 )
 
 // HexCoord.Add：方便邻格计算
@@ -233,13 +259,6 @@ func evaluateStatic(b *Board, player CellState) int {
 
 	// 9) 危险空洞惩罚
 	holesPenalty := -evaluateHoles(b, player)
-
-	// 10) 组合最终得分，把“开局被感染惩罚”和“早期跳跃惩罚”都扣掉
-	//
-	//     - infection 部分用 infDiffWeighted * infW
-	//     - mobility 在开局阶段用 cloneMobDiff、其他阶段用 fullMobDiff
-	//     - pieceScore = (我方棋子数 – 对手棋子数) * pieceW
-	//     - safetyScore = - danger * dangerW
 	pieceScore := (myCnt - opCnt) * pieceW
 	safetyScore := -danger * dangerW
 
@@ -261,6 +280,15 @@ func evaluateStatic(b *Board, player CellState) int {
 			openingPenalty -
 			earlyJumpCost
 
+	// —— 仅此新增：中期对手上一步周边加权 ——
+	if r < midgamePhaseThresh {
+		for _, dir := range Directions {
+			nb := b.LastMove.To.Add(dir)
+			if b.Get(nb) == Empty {
+				finalScore += midgameLastMoveWeight
+			}
+		}
+	}
 	return finalScore
 }
 
@@ -275,36 +303,26 @@ func maxInfFromMoves(b *Board, pl CellState, moves []Move) int {
 	return best
 }
 
+// evaluateHoles 评估空洞区域被对手跳入的惩罚
 func evaluateHoles(b *Board, player CellState) int {
 	op := Opponent(player)
+	// 记录已访问空格
 	visited := make(map[HexCoord]bool)
 	holePenalty := 0
-	holeWeight := 5 // 你可以视情况调大或调小
+	holeWeight := 5 // 空洞区域被对手跳入即惩罚，可调
 
+	// 遍历所有空格，找到未访问的空洞区域
 	for _, start := range b.AllCoords() {
-		// 只关心还没访问的、而且是空的那个点
 		if b.Get(start) != Empty || visited[start] {
 			continue
 		}
-
-		// 用 BFS 把从 start 开始的整个连通空洞区域都找出来
+		// BFS 收集连通空洞
 		queue := []HexCoord{start}
 		region := []HexCoord{start}
 		visited[start] = true
-
-		touchesBorder := false // 如果连通区域能连到“棋盘边缘”，我们可以选择不惩罚它
-		// （或者你想只惩罚内侧空洞，就把 touchesBorder=true 当作“不是封闭空洞”：不扣分）
-
 		for len(queue) > 0 {
 			cur := queue[0]
 			queue = queue[1:]
-
-			// 判断是否连到最外圈(单纯作为示例，可以不判断)
-			if abs(cur.Q) == b.radius || abs(cur.R) == b.radius || abs(cur.Q+cur.R) == b.radius {
-				touchesBorder = true
-			}
-
-			// 扫描该点四周相邻的空格
 			for _, nb := range b.Neighbors(cur) {
 				if !visited[nb] && b.Get(nb) == Empty {
 					visited[nb] = true
@@ -314,48 +332,31 @@ func evaluateHoles(b *Board, player CellState) int {
 			}
 		}
 
-		// 如果整个区域连到棋盘外缘，你也可以不惩罚，或者惩罚更少。
-		// 这里我们假设：只惩罚不连边缘的“内侧空洞”。
-		if touchesBorder {
-			continue
-		}
-
-		// 至此，region 就是一整片连通的“空洞”。
-		// 接下来要判断：对手有没有可能 1 步或者 2 步进入 region 中的某一个空格。
-		// 如果对手从某个己方棋子位置出发，在 <=2 步内能跳到 region 里的某个格子，
-		// 那就说明这个空洞对对手是“可乘之机”，我们就要按 size 扣分。
-
-		regionSize := len(region) // 先记录区域大小
-		opponentCanReach := false
-
-		// 把对手所有棋子的位置先搜到一个切片里：
-		var oppPositions []HexCoord
+		// 收集对手棋子位置
+		oppPositions := make([]HexCoord, 0)
 		for _, c := range b.AllCoords() {
 			if b.Get(c) == op {
 				oppPositions = append(oppPositions, c)
 			}
 		}
 
-		// 对每个空洞中的点，都检查它和所有对手棋子之间的距离，
-		// 只要发现有一个对手棋子 d<=2，就认为“对手可达”
-		for _, holeCell := range region {
+		// 如果对手能在1或2步内进入该区域，则惩罚此区域大小
+		opponentCanReach := false
+		for _, cell := range region {
 			if opponentCanReach {
 				break
 			}
 			for _, opp := range oppPositions {
-				if HexDist(opp, holeCell) <= 2 {
+				if HexDist(opp, cell) <= 2 {
 					opponentCanReach = true
 					break
 				}
 			}
 		}
-
 		if opponentCanReach {
-			// 按区域大小 * 权重来惩罚
-			holePenalty += regionSize * holeWeight
+			holePenalty += len(region) * holeWeight
 		}
 	}
-
 	return holePenalty
 }
 
@@ -389,4 +390,119 @@ func previewInfectedCount(b *Board, mv Move, player CellState) int {
 		}
 	}
 	return count
+}
+
+// ExtractFeatures 从棋盘状态和当前玩家提取一组特征，用于训练或线性评估
+func ExtractFeatures(b *Board, player CellState) []float64 {
+	op := Opponent(player)
+	coords := b.AllCoords()
+	// 1) 空位比例 r
+	empties := 0
+	for _, c := range coords {
+		if b.Get(c) == Empty {
+			empties++
+		}
+	}
+	n := float64(len(coords))
+	r := float64(empties) / n
+
+	// 2) 棋子数差
+	myCnt, opCnt := 0, 0
+	outer, danger := 0, 0
+	for _, c := range coords {
+		s := b.Get(c)
+		if s == player {
+			myCnt++
+			// 边缘
+			if isOuter(c, b.radius) {
+				outer++
+			}
+			// 危险
+			if isInOpponentRange(b, c, op) {
+				danger++
+			}
+		} else if s == op {
+			opCnt++
+			if isOuter(c, b.radius) {
+				outer--
+			}
+		}
+	}
+
+	// 3) 机动性差：克隆或跳跃计数
+	myMoves := GenerateMoves(b, player)
+	opMoves := GenerateMoves(b, op)
+	cloneMobDiff, fullMobDiff := 0, len(myMoves)-len(opMoves)
+	for _, m := range myMoves {
+		if m.IsClone() {
+			cloneMobDiff++
+		}
+	}
+
+	mobDiff := fullMobDiff
+	if r >= openingPhaseThresh {
+		mobDiff = cloneMobDiff
+	}
+
+	// 4) 加权感染差
+	infDiffWeighted := maxWeightedInfFromMoves(b, player, myMoves) -
+		maxWeightedInfFromMoves(b, op, opMoves)
+
+	// 5) 洞惩罚
+	holesPenalty := -evaluateHoles(b, player)
+
+	// 6) 开局惩罚
+	openingPenalty := 0
+	if r >= openingPhaseThresh && opCnt > myCnt {
+		openingPenalty = (opCnt - myCnt) * openingPenaltyWeight
+	}
+
+	// 7) 早期跳跃惩罚
+	earlyJumpCost := 0
+	if r >= openingPhaseThresh && cloneMobDiff > 0 && infDiffWeighted == 0 {
+		earlyJumpCost = earlyJumpPenalty
+	}
+
+	// 8) 中期对手上一步周边加权
+	lastMoveBonus := 0
+	if r < midgamePhaseThresh && b.LastMove.To != (HexCoord{}) {
+		for _, dir := range Directions {
+			nb := b.LastMove.To.Add(dir)
+			if b.Get(nb) == Empty {
+				lastMoveBonus += midgameLastMoveWeight
+			}
+		}
+	}
+	isJump := 0.0
+	if b.LastMove.IsJump() {
+		isJump = 1.0
+	}
+
+	// 特征向量按顺序返回：
+	// [r, myCnt-opCnt, outer, danger, mobDiff, infDiffWeighted,
+	//  holesPenalty, openingPenalty, earlyJumpCost, lastMoveBonus]
+	return []float64{
+		r,
+		float64(myCnt - opCnt),
+		float64(outer),
+		float64(danger),
+		float64(mobDiff),
+		float64(infDiffWeighted),
+		float64(holesPenalty),
+		float64(openingPenalty),
+		float64(earlyJumpCost),
+		float64(lastMoveBonus),
+		isJump,
+	}
+}
+
+// Predict 用线性模型估值。注意：ExtractFeatures 就是之前加好的那 11 维特征函数
+func Predict(b *Board, player CellState) int {
+	feats := ExtractFeatures(b, player)
+	sum := learnedB
+	for i, f := range feats {
+		sum += learnedW[i] * f
+	}
+	// 四舍五入到整数
+	return int(math.Round(sum))
 }

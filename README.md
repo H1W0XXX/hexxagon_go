@@ -41,6 +41,9 @@ Hexxagon 是一款基于六边形棋盘的回合制策略游戏，玩家需要�
 # 人机对战
 ./hexxagon -mode=pve
 
+# 人机对战，查看玩家棋子落子评分（未来2步）
+./hexxagon -mode=pve -tip=true
+
 # 人人对战
 ./hexxagon -mode=pvp
 ```

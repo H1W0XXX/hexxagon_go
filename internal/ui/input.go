@@ -10,6 +10,11 @@ import (
 	"hexxagon_go/internal/game"
 )
 
+type UIState struct {
+	From       *game.HexCoord            // 当前选中的起点（nil 表示未选中）
+	MoveScores map[game.HexCoord]float64 // 起点到各个合法终点的评估分数
+}
+
 func getBoardTransform(tileImg *ebiten.Image) (scale, orgX, orgY, tileW, tileH, vs float64) {
 	tileW = float64(tileImg.Bounds().Dx())
 	tileH = float64(tileImg.Bounds().Dy())
@@ -97,6 +102,32 @@ func (gs *GameScreen) handleInput() {
 		if gs.state.Board.Get(coord) == player {
 			gs.selected = &game.HexCoord{Q: coord.Q, R: coord.R}
 			gs.audioManager.Play("select_piece")
+
+			/* === 新增：计算 MoveScores === */
+			gs.ui.From = gs.selected
+			gs.ui.MoveScores = make(map[game.HexCoord]float64)
+
+			moves := game.GenerateMoves(gs.state.Board, gs.state.CurrentPlayer)
+			for _, mv := range moves {
+				// 只关心从选中起点出的走法
+				if mv.From != *gs.selected {
+					continue
+				}
+				// 在副本上模拟这步
+				bCopy := gs.state.Board.Clone()
+				if _, err := mv.Apply(bCopy, gs.state.CurrentPlayer); err != nil {
+					continue
+				}
+				// 评分：深度 4 举例
+				//score := game.AlphaBeta(bCopy, gs.state.CurrentPlayer, 4)
+				//score := game.Evaluate(bCopy, gs.state.CurrentPlayer)
+				if gs.showScores {
+					score := game.AlphaBetaNoTT(bCopy, game.Opponent(gs.state.CurrentPlayer), gs.state.CurrentPlayer, 2, math.MinInt32, math.MaxInt32)
+					gs.ui.MoveScores[mv.To] = float64(score)
+				}
+			}
+			/* === end 新增 === */
+
 		} else {
 			gs.audioManager.Play("cancel_select_piece")
 		}
@@ -112,6 +143,7 @@ func (gs *GameScreen) handleInput() {
 		if gs.state.Board.Get(coord) == player {
 			gs.selected = &game.HexCoord{Q: coord.Q, R: coord.R}
 			gs.audioManager.Play("select_piece")
+			gs.refreshMoveScores()
 		} else {
 			gs.selected = nil
 			gs.audioManager.Play("cancel_select_piece")
@@ -131,6 +163,7 @@ func (gs *GameScreen) handleInput() {
 		if gs.state.Board.Get(coord) == player {
 			gs.selected = &game.HexCoord{Q: coord.Q, R: coord.R}
 			gs.audioManager.Play("select_piece")
+			gs.refreshMoveScores()
 		} else {
 			gs.selected = nil
 			gs.audioManager.Play("cancel_select_piece")
@@ -153,4 +186,5 @@ func (gs *GameScreen) handleInput() {
 		gs.aiDelayUntil = time.Now().Add(total)
 		gs.selected = nil
 	}
+	gs.refreshMoveScores()
 }

@@ -11,6 +11,8 @@ type undoInfo struct {
 
 // MakeMove 在原盘执行走子，返回 (感染数, undoInfo)
 func (m Move) MakeMove(b *Board, player CellState) (infectedCoords []HexCoord, undo undoInfo) {
+
+	b.LastMove = m
 	// 预分配一个足够装下所有可能被感染的 slice
 	infectedCoords = make([]HexCoord, 0, 6)
 	undo.changed = make([]undoCell, 0, 8)

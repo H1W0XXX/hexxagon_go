@@ -13,6 +13,7 @@ type GameState struct {
 	ScoreB        int       // 玩家 B 的分数
 	GameOver      bool      // 游戏是否结束
 	Winner        CellState // 胜者 (PlayerA、PlayerB 或 Empty 表示平局)
+
 }
 
 // NewGameState 创建并初始化一个新的游戏状态，radius 是棋盘半径

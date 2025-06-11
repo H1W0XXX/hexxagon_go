@@ -17,20 +17,31 @@ func init() {
 
 }
 
+// const useLearned = false
+const useLearned = false
+const jumpMovePenalty = 25
+
 // ------------------------------------------------------------
 // 公共入口
 // ------------------------------------------------------------
 func cloneBoardPool(b *Board) *Board {
 	nb := acquireBoard(b.radius)
-	// 复制 cells
+	// —— 确保 cells map 已初始化且已清空 ——
+	if nb.cells == nil {
+		nb.cells = make(map[HexCoord]CellState, len(b.cells))
+	} else {
+		for k := range nb.cells {
+			delete(nb.cells, k)
+		}
+	}
+	// 复制 cells 数据
 	for c, s := range b.cells {
 		nb.cells[c] = s
 	}
+	// 同步 hash
 	nb.hash = b.hash
 	return nb
 }
-
-const jumpMovePenalty = 25
 
 func cloneBoard(b *Board) *Board {
 	// 分配全新的 map，绝不复用
@@ -100,10 +111,22 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 	order := make([]scored, len(moves))
 
 	for i, m := range moves {
-		nb := cloneBoard(b) // 手工新分配
-		m.MakeMove(nb, player)
-		score := evaluateStatic(nb, player)
-		// 没有 releaseBoard(nb)
+		// 记录哈希
+		origHash := b.hash
+		// 执行落子
+		undo := mMakeMoveWithUndo(b, m, player)
+		// 静态评估
+		var score int
+		if useLearned {
+			score = Predict(b, player)
+		} else {
+			score = evaluateStatic(b, player)
+		}
+
+		// 回溯
+		b.UnmakeMove(undo)
+		b.hash = origHash
+
 		order[i] = scored{m, score}
 	}
 
@@ -131,11 +154,15 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 		wg.Add(1)
 		go func(it scored) {
 			defer wg.Done()
-			// 一样用对象池克隆
-			nb := cloneBoard(b)
+			// 【改动】从池里拿，不要用 cloneBoard
+			nb := cloneBoardPool(b)
 			_, _ = it.mv.MakeMove(nb, player)
-			score := alphaBeta(nb, nb.hash,
-				Opponent(player), player, depth-1, alphaRoot, betaRoot)
+			score := alphaBeta(
+				nb, nb.hash,
+				Opponent(player), player,
+				depth-1, alphaRoot, betaRoot,
+			)
+			// 用完再放回池里
 			releaseBoard(nb)
 
 			resCh <- result{it.mv, score}
@@ -183,8 +210,8 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 	// 默认选最优手
 	choice := bestMoves[0]
 
-	// 当存在多手同分，且差距 < ε（这里用 1 分作阈值）时，随机挑一手
-	if len(bestMoves) > 1 && bestScore-secondScore < 1 {
+	// 当存在多手同分，且差距 < ε（这里用 3 分作阈值）时，随机挑一手
+	if len(bestMoves) > 1 && bestScore-secondScore < 3 {
 		choice = bestMoves[rand.Intn(len(bestMoves))]
 	}
 
@@ -201,6 +228,7 @@ func mMakeMoveWithUndo(b *Board, mv Move, player CellState) undoInfo {
 	_ = infected
 	return u
 }
+
 func alphaBeta(
 	b *Board,
 	hash uint64,
@@ -223,7 +251,12 @@ func alphaBeta(
 
 	// 2) 叶节点或无走子：直接评估，并写入置换表
 	if depth == 0 || len(moves) == 0 {
-		val := evaluateStatic(b, original)
+		var val int
+		if useLearned {
+			val = Predict(b, original)
+		} else {
+			val = evaluateStatic(b, original)
+		}
 		storeTT(hash, depth, val, ttExact)
 		return val
 	}
@@ -326,7 +359,10 @@ func alphaBeta(
 			b.hash = origHash
 
 			if mv.IsJump() {
-				score -= jumpMovePenalty
+				if !useLearned {
+					score -= jumpMovePenalty
+				}
+
 			}
 
 			// 更新 bestScore / α / 剪枝
@@ -368,8 +404,11 @@ func alphaBeta(
 			b.UnmakeMove(undo)
 
 			if mv.IsJump() {
-				// 由于 MIN 节点是在找最小 score，所以想让它不喜欢跳，就给它加一个很大的正分：
-				score += jumpMovePenalty
+				if !useLearned {
+					// 由于 MIN 节点是在找最小 score，所以想让它不喜欢跳，就给它加一个很大的正分：
+					score += jumpMovePenalty
+				}
+
 			}
 
 			// 更新 best, β, 剪枝
@@ -445,4 +484,106 @@ func IterativeDeepening(
 		best, bestScore, ok = mv, 0, true // 根节点时 score 在内部已比较
 	}
 	return
+}
+
+func AlphaBeta(b *Board, player CellState, depth int) int {
+	return alphaBeta(
+		b,
+		b.hash,
+		Opponent(player), // ← 现在轮到对手走
+		player,           // original: 根方仍然是我方
+		depth,
+		math.MinInt,
+		math.MaxInt,
+	)
+}
+
+// alphaBetaNoTT 在 b 上执行一次不带置换表的 α–β 搜索。
+// - current: 当前行棋方
+// - original: 根节点的行棋方，用于 evaluate 判断
+// - depth: 剩余深度
+// - alpha, beta: 剪枝界限
+func AlphaBetaNoTT(
+	b *Board,
+	current, original CellState,
+	depth, alpha, beta int,
+) int {
+	// 开局阶段判断示例（可保留或删掉）
+	coords := b.AllCoords()
+	empties := 0
+	for _, c := range coords {
+		if b.Get(c) == Empty {
+			empties++
+		}
+	}
+	//r := float64(empties) / float64(len(coords))
+	// ———— 可选：在这里用 r 做开局惩罚 ————
+
+	// 1) 递归终止：到达叶子节点或游戏结束
+	if depth == 0 || b.CountPieces(PlayerA)+b.CountPieces(PlayerB) == len(coords) {
+		// 用原始行棋方做静态评估
+		return evaluateStatic(b, original)
+	}
+
+	// 2) 生成所有合法走法
+	moves := GenerateMoves(b, current)
+
+	// 3) 区分 MAX / MIN 节点
+	if current == original {
+		// MAX 节点
+		best := math.MinInt32
+		for _, mv := range moves {
+			// 如果需要把“非感染跳跃”惩罚保留，放在这里：
+			// if r>=openingPhaseThresh && mv.IsJump() && previewInfectedCount(b,mv,current)==0 {
+			//     continue
+			// }
+
+			// 执行落子并记录 undo
+			undo := mMakeMoveWithUndo(b, mv, current)
+
+			// 递归
+			score := AlphaBetaNoTT(b, Opponent(current), original, depth-1, alpha, beta)
+
+			// 撤销
+			b.UnmakeMove(undo)
+
+			// 更新 best、alpha、剪枝
+			if score > best {
+				best = score
+			}
+			if score > alpha {
+				alpha = score
+			}
+			if alpha >= beta {
+				break
+			}
+		}
+		return best
+
+	} else {
+		// MIN 节点
+		best := math.MaxInt32
+		for _, mv := range moves {
+			// 执行落子并记录 undo
+			undo := mMakeMoveWithUndo(b, mv, current)
+
+			// 递归
+			score := AlphaBetaNoTT(b, Opponent(current), original, depth-1, alpha, beta)
+
+			// 撤销
+			b.UnmakeMove(undo)
+
+			// 更新 best、beta、剪枝
+			if score < best {
+				best = score
+			}
+			if score < beta {
+				beta = score
+			}
+			if beta <= alpha {
+				break
+			}
+		}
+		return best
+	}
 }

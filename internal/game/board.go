@@ -31,9 +31,10 @@ var Directions = []HexCoord{
 // Board represents a hexagonal board of a given radius.
 // Coordinates satisfying |q| <= radius, |r| <= radius, |q+r| <= radius are valid.
 type Board struct {
-	radius int
-	cells  map[HexCoord]CellState
-	hash   uint64
+	radius   int
+	cells    map[HexCoord]CellState
+	hash     uint64
+	LastMove Move
 }
 
 var boardPool = sync.Pool{
@@ -167,26 +168,13 @@ func abs(x int) int {
 	return x
 }
 
-// Clone 返回当前棋盘的深拷贝，用于 AI 模拟走子
-//
-//	func (b *Board) Clone() *Board {
-//		// 新建一个 cells map，并复制所有格子状态
-//		newCells := make(map[HexCoord]CellState, len(b.cells))
-//		for coord, state := range b.cells {
-//			newCells[coord] = state
-//		}
-//		// 返回一个新的 Board 实例
-//		return &Board{
-//			radius: b.radius,
-//			cells:  newCells,
-//		}
-//	}
 func (b *Board) Clone() *Board {
 	nb := acquireBoard(b.radius)
 	for coord, state := range b.cells {
 		nb.cells[coord] = state
 	}
 	nb.hash = b.hash
+	nb.LastMove = b.LastMove
 	return nb
 }
 
@@ -247,4 +235,9 @@ func (b *Board) ToFeature(side CellState) []float32 {
 		}
 	}
 	return fe
+}
+
+func (b *Board) ApplyMove(m Move, player CellState) {
+	b.applyMove(m, player) // 忽略返回值，评分阶段不需要 undo
+	b.LastMove = m
 }

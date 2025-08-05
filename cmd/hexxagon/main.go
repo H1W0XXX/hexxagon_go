@@ -51,7 +51,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum)
 	ebiten.SetVsyncEnabled(true)
 	ebiten.SetTPS(30)
 	ebiten.SetWindowSize(screenW*ScreenScale, screenH*ScreenScale)

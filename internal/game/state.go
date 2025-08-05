@@ -56,6 +56,10 @@ func NewGameState(radius int) *GameState {
 		Board:         b,
 		CurrentPlayer: PlayerA,
 	}
+
+	// 把“行棋方随机键” XOR 进棋盘哈希
+	b.hash ^= zobristSide[sideIdx(gs.CurrentPlayer)]
+	
 	gs.updateScores() // 计算初始分数
 	return gs
 }

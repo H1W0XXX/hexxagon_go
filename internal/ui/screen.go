@@ -260,8 +260,15 @@ func (gs *GameScreen) performMove(move game.Move, player game.CellState) (time.D
 	}
 }
 
+var firstFrame = true
+
 // Update 更新游戏状态
 func (gs *GameScreen) Update() error {
+	if firstFrame {
+		firstFrame = false
+		ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum) // 已经进入事件循环，安全
+	}
+	
 	now := time.Now()
 	if !lastUpdate.IsZero() {
 		elapsed := now.Sub(lastUpdate)

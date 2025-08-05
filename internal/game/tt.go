@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ------------------------------------------------------------
@@ -21,6 +22,9 @@ var (
 	onceZobristInit sync.Once
 )
 
+// side-to-move Zobrist keys: index 0 = PlayerA, index 1 = PlayerB
+var zobristSide [2]uint64
+
 // init 在程序启动时执行一次，生成所有随机键。
 func init() {
 	initZobrist()
@@ -29,6 +33,10 @@ func init() {
 // initZobrist 预生成 maxRadius 棋盘内所有格子的 Zobrist 键。
 func initZobrist() {
 	onceZobristInit.Do(func() {
+		// 1) Seed the RNG for reproducible randomness
+		rand.Seed(time.Now().UnixNano())
+
+		// 2) Build per-cell Zobrist keys
 		coords := AllCoords(maxRadius)
 		zobristCell = make([][4]uint64, len(coords))
 		hexCoordToIndex = make(map[HexCoord]int, len(coords))
@@ -36,11 +44,15 @@ func initZobrist() {
 			hexCoordToIndex[c] = i
 			zobristCell[i] = [4]uint64{
 				rand.Uint64(), // Empty
-				0,             // Blocked（写死为0，永不参与hash）
+				0,             // Blocked (never participates)
 				rand.Uint64(), // PlayerA
 				rand.Uint64(), // PlayerB
 			}
 		}
+
+		// 3) Build side-to-move Zobrist keys
+		zobristSide[0] = rand.Uint64() // PlayerA to move
+		zobristSide[1] = rand.Uint64() // PlayerB to move
 	})
 }
 
@@ -167,4 +179,11 @@ func RunSearch(b *Board, player CellState, depth int) int {
 		probes, hits, rate)
 
 	return score
+}
+
+func sideIdx(p CellState) int {
+	if p == PlayerB {
+		return 1
+	}
+	return 0
 }

@@ -7,10 +7,12 @@ import (
 	"hexxagon_go/internal/ui"
 	"log"
 	"strconv"
+	//"runtime"
 )
 
 // import _ "net/http/pprof"
-
+// import "golang.org/x/sys/windows"
+//
 //	func init() {
 //		if runtime.GOOS == "windows" {
 //			h := windows.CurrentProcess()
@@ -51,7 +53,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum)
+	//ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum)
 	ebiten.SetVsyncEnabled(true)
 	ebiten.SetTPS(30)
 	ebiten.SetWindowSize(screenW*ScreenScale, screenH*ScreenScale)

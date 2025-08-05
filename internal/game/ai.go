@@ -322,6 +322,8 @@ func alphaBeta(
 
 			// 计算 childHash：先把 from/to/感染全部 xor 掉、再 xor 进新状态
 			childHash := origHash
+			childHash ^= zobristSide[sideIdx(current)] //去掉当前行棋方
+
 			// ① 把 from(原来是 current) xor 掉
 			childHash ^= zobristKey(mv.From, current)
 			// ② 如果是 Jump，把 from→Empty
@@ -332,18 +334,15 @@ func alphaBeta(
 			childHash ^= zobristKey(mv.To, Empty)
 			// ④ 把 to→ current
 			childHash ^= zobristKey(mv.To, current)
-			// ⑤ 感染格：foreach n in b.Neighbors(mv.To) { if b.Get(n)==Opponent(current) {
-			//         childHash ^= zobristKey(n, Opponent(current));
-			//         childHash ^= zobristKey(n, current);
-			//     }
-			// }
-			for _, n := range b.Neighbors(mv.To) {
+			for _, n := range b.Neighbors(mv.To) { // ★ 增量感染
 				if b.Get(n) == Opponent(current) {
 					childHash ^= zobristKey(n, Opponent(current))
 					childHash ^= zobristKey(n, current)
 				}
 			}
 
+			next := Opponent(current)
+			childHash ^= zobristSide[sideIdx(next)]
 			// 让 b.hash 也同步修改到 childHash
 			b.hash = childHash
 
@@ -385,13 +384,19 @@ func alphaBeta(
 			// 如果你只想给 MAX 侧惩罚，那么这里可以不做任何改动；否则下面也可以照着 MAX 的做法—给 MIN 侧的“非感染跳跃”一个很高的分数，使 MIN 不愿意选它。
 			// 通常我们只对 MAX 侧进行“非感染跳跃惩罚”，所以这里不加惩罚判断——保持原样即可。
 
-			// 同样要增量更新哈希
-			childHash := hash ^
-				zobristKey(mv.From, current) ^
-				zobristKey(mv.To, Empty)
-			if mv.IsJump() {
-				childHash = childHash ^ zobristKey(mv.From, current) ^ zobristKey(mv.From, Empty)
-			}
+			childHash := hash
+			// ★ 0) 去掉当前行棋方
+			childHash ^= zobristSide[sideIdx(current)]
+
+			// ①–⑤ 增量 XOR 格子状态
+			childHash ^= zobristKey(mv.From, current)
+
+			//if mv.IsJump() {
+			//	childHash = childHash ^ zobristKey(mv.From, current) ^ zobristKey(mv.From, Empty)
+			//}
+			next := Opponent(current)
+			childHash ^= zobristSide[sideIdx(next)] // ★ 新增
+
 			childHash = childHash ^ zobristKey(mv.To, Empty) ^ zobristKey(mv.To, current)
 
 			// 执行落子并记录 undo
@@ -487,14 +492,18 @@ func IterativeDeepening(
 }
 
 func AlphaBeta(b *Board, player CellState, depth int) int {
+	// 1) 把“行棋方”也异或进哈希，确保置换表区分 Max/Min
+	initialHash := b.hash ^ zobristSide[sideIdx(player)]
+
+	// 2) 调用内层实现：先轮到对手走，再到 player
 	return alphaBeta(
 		b,
-		b.hash,
-		Opponent(player), // ← 现在轮到对手走
-		player,           // original: 根方仍然是我方
+		initialHash,
+		Opponent(player), // current = 对手
+		player,           // original = 我方
 		depth,
-		math.MinInt,
-		math.MaxInt,
+		math.MinInt, // 初始 α
+		math.MaxInt, // 初始 β
 	)
 }
 

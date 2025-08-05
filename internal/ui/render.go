@@ -167,14 +167,16 @@ func axialToScreen(c game.HexCoord,
 }
 
 func (gs *GameScreen) refreshMoveScores() {
-	// 1. 选中清空
+	// 1. 如果未选中，清空并返回
 	if gs.selected == nil {
 		gs.ui = UIState{}
 		return
 	}
+	// 2. 记录玩家与起点
+	player := gs.state.CurrentPlayer
 	sel := *gs.selected
 
-	// 2. 准备容器
+	// 3. 初始化 / 清空 MoveScores
 	gs.ui.From = &sel
 	if gs.ui.MoveScores == nil {
 		gs.ui.MoveScores = make(map[game.HexCoord]float64)
@@ -184,24 +186,27 @@ func (gs *GameScreen) refreshMoveScores() {
 		}
 	}
 
-	// 3. 枚举所有合法走法
-	moves := game.GenerateMoves(gs.state.Board, gs.state.CurrentPlayer)
+	// 4. 枚举所有合法走法，只处理从 sel 出发的
+	moves := game.GenerateMoves(gs.state.Board, player)
 	for _, mv := range moves {
 		if mv.From != sel {
 			continue
 		}
-		// 4. 模拟落子（用你包里的 Apply）
+
+		// 5. 模拟落子
 		bCopy := gs.state.Board.Clone()
-		if _, err := mv.Apply(bCopy, gs.state.CurrentPlayer); err != nil {
+		if _, err := mv.Apply(bCopy, player); err != nil {
 			continue
 		}
-		// 5. 评分：要么静态评估，要么深度搜索
-		//score := game.AlphaBeta(bCopy, gs.state.CurrentPlayer, 4)
-		//score := game.Evaluate(bCopy, gs.state.CurrentPlayer)
-		score := game.AlphaBetaNoTT(bCopy, game.Opponent(gs.state.CurrentPlayer), gs.state.CurrentPlayer, 2, math.MinInt32, math.MaxInt32)
-		// 或者
-		// score := float64(game.AlphaBeta(bCopy, gs.state.CurrentPlayer, 4))
 
+		// 6. 深度搜索评分（根节点轮到对手）
+		score := game.AlphaBeta(
+			bCopy,  // 模拟后的棋盘
+			player, // 你的阵营（根节点 Original）
+			2,      // 搜索深度
+		)
+
+		// 7. 保存结果
 		gs.ui.MoveScores[mv.To] = float64(score)
 	}
 }

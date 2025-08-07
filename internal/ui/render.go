@@ -167,44 +167,33 @@ func axialToScreen(c game.HexCoord,
 }
 
 func (gs *GameScreen) refreshMoveScores() {
-	// 1. 如果未选中，清空并返回
+	// 1) 如果没选中，清空
 	if gs.selected == nil {
 		gs.ui = UIState{}
 		return
 	}
-	// 2. 记录玩家与起点
-	player := gs.state.CurrentPlayer
 	sel := *gs.selected
+	player := gs.state.CurrentPlayer
 
-	// 3. 初始化 / 清空 MoveScores
+	// 2) 重置 From 和 MoveScores
 	gs.ui.From = &sel
-	if gs.ui.MoveScores == nil {
-		gs.ui.MoveScores = make(map[game.HexCoord]float64)
-	} else {
-		for k := range gs.ui.MoveScores {
-			delete(gs.ui.MoveScores, k)
-		}
-	}
+	gs.ui.MoveScores = make(map[game.HexCoord]float64)
 
-	// 4. 枚举所有合法走法，只处理从 sel 出发的
+	// 3) 枚举所有合法走法，只处理从 sel 出发的
 	moves := game.GenerateMoves(gs.state.Board, player)
 	for _, mv := range moves {
 		if mv.From != sel {
 			continue
 		}
 
-		// 5. 模拟落子
+		// 4) 复制棋盘并执行落子（Move.Apply 会更新格子，但不更新 hash）
 		bCopy := gs.state.Board.Clone()
 		if _, err := mv.Apply(bCopy, player); err != nil {
 			continue
 		}
 
-		// 6. 深度搜索评分（根节点轮到对手）
-		score := game.AlphaBeta(
-			bCopy,  // 模拟后的棋盘
-			player, // 你的阵营（根节点 Original）
-			2,      // 搜索深度
-		)
+		// 6. 直接让包装器评分，它会内部重新计算哈希
+		score := game.AlphaBetaNoTT(bCopy, player, 2)
 
 		// 7. 保存结果
 		gs.ui.MoveScores[mv.To] = float64(score)

@@ -512,51 +512,48 @@ func AlphaBeta(b *Board, player CellState, depth int) int {
 // - original: 根节点的行棋方，用于 evaluate 判断
 // - depth: 剩余深度
 // - alpha, beta: 剪枝界限
-func AlphaBetaNoTT(
+// ------------------------------------------------------------
+// 对外包装器 —— 只要 3 个参数即可调用
+// ------------------------------------------------------------
+func AlphaBetaNoTT(b *Board, player CellState, depth int) int {
+	// 根节点先把“行棋方随机键” XOR 进去，保证 hash 正确
+	initialHash := hashBoard(b) ^ zobristSide[sideIdx(player)]
+	b.hash = initialHash
+
+	// 递归从对手开始（current），original = player
+	return alphaBetaNoTT(
+		b,
+		Opponent(player), // current
+		player,           // original
+		depth,
+		math.MinInt32,
+		math.MaxInt32,
+	)
+}
+
+// ------------------------------------------------------------
+// 内部递归实现 —— 不暴露、多参数
+// ------------------------------------------------------------
+func alphaBetaNoTT(
 	b *Board,
 	current, original CellState,
 	depth, alpha, beta int,
 ) int {
-	// 开局阶段判断示例（可保留或删掉）
-	coords := b.AllCoords()
-	empties := 0
-	for _, c := range coords {
-		if b.Get(c) == Empty {
-			empties++
-		}
-	}
-	//r := float64(empties) / float64(len(coords))
-	// ———— 可选：在这里用 r 做开局惩罚 ————
-
-	// 1) 递归终止：到达叶子节点或游戏结束
-	if depth == 0 || b.CountPieces(PlayerA)+b.CountPieces(PlayerB) == len(coords) {
-		// 用原始行棋方做静态评估
+	// 递归终止：深度到 0 或无空位
+	if depth == 0 || b.CountPieces(PlayerA)+b.CountPieces(PlayerB) == len(b.AllCoords()) {
 		return evaluateStatic(b, original)
 	}
 
-	// 2) 生成所有合法走法
 	moves := GenerateMoves(b, current)
 
-	// 3) 区分 MAX / MIN 节点
 	if current == original {
-		// MAX 节点
+		// -------- MAX 节点 --------
 		best := math.MinInt32
 		for _, mv := range moves {
-			// 如果需要把“非感染跳跃”惩罚保留，放在这里：
-			// if r>=openingPhaseThresh && mv.IsJump() && previewInfectedCount(b,mv,current)==0 {
-			//     continue
-			// }
-
-			// 执行落子并记录 undo
 			undo := mMakeMoveWithUndo(b, mv, current)
-
-			// 递归
-			score := AlphaBetaNoTT(b, Opponent(current), original, depth-1, alpha, beta)
-
-			// 撤销
+			score := alphaBetaNoTT(b, Opponent(current), original, depth-1, alpha, beta)
 			b.UnmakeMove(undo)
 
-			// 更新 best、alpha、剪枝
 			if score > best {
 				best = score
 			}
@@ -568,31 +565,24 @@ func AlphaBetaNoTT(
 			}
 		}
 		return best
-
-	} else {
-		// MIN 节点
-		best := math.MaxInt32
-		for _, mv := range moves {
-			// 执行落子并记录 undo
-			undo := mMakeMoveWithUndo(b, mv, current)
-
-			// 递归
-			score := AlphaBetaNoTT(b, Opponent(current), original, depth-1, alpha, beta)
-
-			// 撤销
-			b.UnmakeMove(undo)
-
-			// 更新 best、beta、剪枝
-			if score < best {
-				best = score
-			}
-			if score < beta {
-				beta = score
-			}
-			if beta <= alpha {
-				break
-			}
-		}
-		return best
 	}
+
+	// -------- MIN 节点 --------
+	best := math.MaxInt32
+	for _, mv := range moves {
+		undo := mMakeMoveWithUndo(b, mv, current)
+		score := alphaBetaNoTT(b, Opponent(current), original, depth-1, alpha, beta)
+		b.UnmakeMove(undo)
+
+		if score < best {
+			best = score
+		}
+		if score < beta {
+			beta = score
+		}
+		if beta <= alpha {
+			break
+		}
+	}
+	return best
 }

@@ -122,7 +122,7 @@ func (gs *GameScreen) handleInput() {
 				//score := game.AlphaBeta(bCopy, gs.state.CurrentPlayer, 4)
 				//score := game.Evaluate(bCopy, gs.state.CurrentPlayer)
 				if gs.showScores {
-					score := game.AlphaBetaNoTT(bCopy, game.Opponent(gs.state.CurrentPlayer), gs.state.CurrentPlayer, 2, math.MinInt32, math.MaxInt32)
+					score := game.AlphaBetaNoTT(bCopy, player, 2)
 					gs.ui.MoveScores[mv.To] = float64(score)
 				}
 			}

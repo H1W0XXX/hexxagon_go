@@ -156,6 +156,7 @@ func outerRingCoords(b *Board) []HexCoord {
 	}
 	return ring
 }
+
 func evaluateStatic(b *Board, player CellState) int {
 	op := Opponent(player)
 
@@ -169,13 +170,13 @@ func evaluateStatic(b *Board, player CellState) int {
 	}
 	r := float64(empties) / float64(len(coords))
 
-	// 2) 如果处于“开局前期”（r ≥ openingPhaseThresh），并且对手棋子数比自己多，就严重惩罚
+	// 2) 如果处于“开局前期”（r ≥ openingPhaseThresh），且对手子数多于我方，就严重惩罚
 	myCnt, opCnt := 0, 0
 	for _, c := range coords {
-		s := b.Get(c)
-		if s == player {
+		switch b.Get(c) {
+		case player:
 			myCnt++
-		} else if s == op {
+		case op:
 			opCnt++
 		}
 	}
@@ -184,13 +185,13 @@ func evaluateStatic(b *Board, player CellState) int {
 		openingPenalty = (opCnt - myCnt) * openingPenaltyWeight
 	}
 
-	// 3) 动态权重计算
+	// 3) 动态权重
 	edgeW := dynamicEdgeW(r)
 	pieceW := dynamicPieceW(r)
-	jumpW := dynamicJumpW(r)
+	//jumpW := dynamicJumpW(r)
 	infW := dynamicInfW(r)
 
-	// 4) 统计棋子数、外缘数量、危险数量
+	// 4) 统计边缘 / 危险
 	outer, danger := 0, 0
 	for _, c := range coords {
 		s := b.Get(c)
@@ -205,74 +206,62 @@ func evaluateStatic(b *Board, player CellState) int {
 			if isInOpponentRange(b, c, op) {
 				danger++
 			}
-		} else {
+		} else { // 对手
 			if onEdge {
-				outer-- // 对手在边缘计负分
+				outer-- // 对手在边缘记负分
 			}
 		}
 	}
 
-	// 5) “机动性差”改为只统计 克隆 走法（mobCloneDiff），而不是 所有 走法
-	//
-	//    这样开局阶段 r ≥ openingPhaseThresh 时，会只关心“克隆”的数量，
-	//    如果对手有更多可用克隆，也会被扣分；反之我方有更多可用克隆会加分。
+	// 5) 生成走法
 	myMoves := GenerateMoves(b, player)
 	opMoves := GenerateMoves(b, op)
 
-	// 只统计 克隆 走法 数量
-	myCloneCount := 0
+	// 克隆机动性差
+	myCloneCount, opCloneCount := 0, 0
 	for _, m := range myMoves {
 		if m.IsClone() {
 			myCloneCount++
 		}
 	}
-	opCloneCount := 0
 	for _, m := range opMoves {
 		if m.IsClone() {
 			opCloneCount++
 		}
 	}
-	cloneMobDiff := myCloneCount - opCloneCount
+	//cloneMobDiff := myCloneCount - opCloneCount
+	//fullMobDiff := len(myMoves) - len(opMoves)
 
-	// 如果不在开局阶段，则仍旧用“克隆+跳跃”之和做机动性差
-	fullMobDiff := len(myMoves) - len(opMoves)
-
-	// 6) “加权感染差”（infDiffWeighted）：对“跳跃感染”打低分，对“克隆感染”打高分
+	// 6) 加权感染差
 	infDiffWeighted := maxWeightedInfFromMoves(b, player, myMoves) -
 		maxWeightedInfFromMoves(b, op, opMoves)
 
-	// 7) “早期跳跃惩罚”：如果 r ≥ openingPhaseThresh，且我方存在可用克隆（myCloneCount>0），
-	//    但静态评价中还是让 jump 得分部分占比很高（也就是说实际局面没有感染产生），
-	//    就额外扣掉一笔 earlyJumpPenalty。
+	// 7) 早期跳跃惩罚（修改点）
 	//
-	//    具体判断方式：只要开局阶段 r ≥ openingPhaseThresh && myCloneCount > 0 && infDiffWeighted == 0，
-	//    说明“有克隆可以感染，却没有任何感染量（infDiffWeighted 为 0）”，
-	//    那很可能就是 AI 那一步选择了“跳跃”而不感染，强行把棋子移到更远位置去。
-	//    因此给出一次额外惩罚，让 AI 更倾向于用克隆去感染。
+	//    若仍在开局阶段且存在可克隆走法，但“最佳跳跃”感染不足 2 颗棋子，
+	//    则认为跳跃收益太低，施加惩罚；否则不扣分。
+	maxJumpInf := maxJumpInfFromMoves(b, player, myMoves) // ← 新增
 	earlyJumpCost := 0
-	if r >= openingPhaseThresh && myCloneCount > 0 && infDiffWeighted == 0 {
+	if r >= openingPhaseThresh && myCloneCount > 0 && maxJumpInf < 2 {
 		earlyJumpCost = earlyJumpPenalty
 	}
 
-	// 8) 边缘分
+	// 8) 其他打分项
 	outerScore := outer * edgeW
-
-	// 9) 危险空洞惩罚
 	holesPenalty := -evaluateHoles(b, player)
 	pieceScore := (myCnt - opCnt) * pieceW
 	safetyScore := -danger * dangerW
 
-	// 根据是否跨过开局阶段来决定用哪个 mobility 差值
-	mobScore := 0
-	if r >= openingPhaseThresh {
-		mobScore = cloneMobDiff * jumpW / 3
-	} else {
-		mobScore = fullMobDiff * jumpW / 3
-	}
+	//mobScore := 0
+	//if r >= openingPhaseThresh {
+	//	mobScore = cloneMobDiff * jumpW / 3
+	//} else {
+	//	mobScore = fullMobDiff * jumpW / 3
+	//}
 
 	finalScore :=
 		pieceScore*2 +
-			mobScore +
+			//mobScore +
 			infDiffWeighted*infW/2 +
 			outerScore +
 			safetyScore +
@@ -280,7 +269,7 @@ func evaluateStatic(b *Board, player CellState) int {
 			openingPenalty -
 			earlyJumpCost
 
-	// —— 仅此新增：中期对手上一步周边加权 ——
+	// —— 中期对手上一步周边加权 —— //
 	if r < midgamePhaseThresh {
 		for _, dir := range Directions {
 			nb := b.LastMove.To.Add(dir)
@@ -290,6 +279,33 @@ func evaluateStatic(b *Board, player CellState) int {
 		}
 	}
 	return finalScore
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 辅助：统计“跳跃”走法能够感染的最大棋子数
+// ─────────────────────────────────────────────────────────────────────────────
+func maxJumpInfFromMoves(b *Board, player CellState, moves []Move) int {
+	op := Opponent(player)
+	maxInf := 0
+
+	for _, m := range moves {
+		if !m.IsJump() {
+			continue
+		}
+
+		// 估算：跳到 m.To 后，m.To 周围 6 个方向属于对手的棋子都会被感染
+		cnt := 0
+		for _, dir := range Directions {
+			nb := m.To.Add(dir)
+			if b.Get(nb) == op {
+				cnt++
+			}
+		}
+		if cnt > maxInf {
+			maxInf = cnt
+		}
+	}
+	return maxInf
 }
 
 func maxInfFromMoves(b *Board, pl CellState, moves []Move) int {

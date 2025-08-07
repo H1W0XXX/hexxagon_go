@@ -18,6 +18,8 @@ import (
 
 	"hexxagon_go/internal/assets"
 	"hexxagon_go/internal/game"
+
+	"golang.org/x/image/font"
 )
 
 var lastUpdate time.Time
@@ -115,6 +117,8 @@ type GameScreen struct {
 
 	ui         UIState
 	showScores bool
+
+	fontFace font.Face
 }
 
 type ReplayStep struct {
@@ -133,8 +137,9 @@ func NewGameScreen(ctx *audio.Context, aiEnabled, showScores bool) (*GameScreen,
 		state:       game.NewGameState(BoardRadius),
 		pieceImages: make(map[game.CellState]*ebiten.Image),
 		aiEnabled:   aiEnabled,
-		showScores:  showScores, // ← 新增
-		ui:          UIState{},  // 初始化 UIState
+		showScores:  showScores,
+		ui:          UIState{}, // 初始化 UIState
+		fontFace:    basicfont.Face7x13,
 	}
 
 	// 加载贴图
@@ -169,15 +174,6 @@ func NewGameScreen(ctx *audio.Context, aiEnabled, showScores bool) (*GameScreen,
 	return gs, nil
 }
 
-// Update 每帧更新：处理用户输入和 AI（若有）
-//
-//	func (gs *GameScreen) Update() error {
-//		// 处理玩家输入（选中/移动）
-//		gs.audioManager.Update()
-//		gs.handleInput()
-//		return nil
-//	}
-//
 // performMove 执行一次完整落子，返回本次行动需要的总耗时（用于 aiDelayUntil）
 func (gs *GameScreen) performMove(move game.Move, player game.CellState) (time.Duration, error) {
 	gs.isAnimating = true // 开始动画时设置为 true
@@ -268,7 +264,7 @@ func (gs *GameScreen) Update() error {
 		firstFrame = false
 		ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum) // 已经进入事件循环，安全
 	}
-	
+
 	now := time.Now()
 	if !lastUpdate.IsZero() {
 		elapsed := now.Sub(lastUpdate)
@@ -450,6 +446,12 @@ func (gs *GameScreen) Draw(screen *ebiten.Image) {
 	op.GeoM.Translate(dx, dy)
 
 	screen.DrawImage(gs.offscreen, op)
+
+	aCnt := gs.state.Board.CountPieces(game.PlayerA)
+	bCnt := gs.state.Board.CountPieces(game.PlayerB)
+
+	info := fmt.Sprintf("Red: %d     White: %d", aCnt, bCnt)
+	text.Draw(screen, info, gs.fontFace, 20, 24, color.White)
 }
 
 // Layout 定义窗口尺寸
@@ -472,3 +474,14 @@ func boardTransform(tileImg *ebiten.Image) (float64, float64, float64, int, int,
 	originY := (float64(WindowHeight) - boardH*scale) / 2
 	return scale, originX, originY, tileW, tileH, vs
 }
+
+//func loadUIFont() font.Face {
+//	data, _ := os.ReadFile("assets/font/Roboto-Regular.ttf")
+//	ft, _ := opentype.Parse(data)
+//	face, _ := opentype.NewFace(ft, &opentype.FaceOptions{
+//		Size:    18,
+//		DPI:     72,
+//		Hinting: font.HintingFull,
+//	})
+//	return face
+//}

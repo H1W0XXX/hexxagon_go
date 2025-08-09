@@ -165,9 +165,7 @@ func axialToScreen(c game.HexCoord,
 	sy := offY*screenScale + dy
 	return sx, sy
 }
-
 func (gs *GameScreen) refreshMoveScores() {
-	// 1) 如果没选中，清空
 	if gs.selected == nil {
 		gs.ui = UIState{}
 		return
@@ -175,27 +173,29 @@ func (gs *GameScreen) refreshMoveScores() {
 	sel := *gs.selected
 	player := gs.state.CurrentPlayer
 
-	// 2) 重置 From 和 MoveScores
 	gs.ui.From = &sel
 	gs.ui.MoveScores = make(map[game.HexCoord]float64)
 
-	// 3) 枚举所有合法走法，只处理从 sel 出发的
 	moves := game.GenerateMoves(gs.state.Board, player)
 	for _, mv := range moves {
 		if mv.From != sel {
 			continue
 		}
 
-		// 4) 复制棋盘并执行落子（Move.Apply 会更新格子，但不更新 hash）
 		bCopy := gs.state.Board.Clone()
+
+		// 关键：告诉评估“上一手就是这步”
+		bCopy.LastMove = mv
+
+		// 真正把这步下到 bCopy 上（会翻子）
 		if _, err := mv.Apply(bCopy, player); err != nil {
 			continue
 		}
 
-		// 6. 直接让包装器评分，它会内部重新计算哈希
-		score := game.AlphaBetaNoTT(bCopy, player, 2)
+		// 用静态评估（或深度=0 的 AlphaBetaNoTT）
+		// score := game.AlphaBetaNoTT(bCopy, player, 0)
+		score := game.Evaluate(bCopy, player)
 
-		// 7. 保存结果
 		gs.ui.MoveScores[mv.To] = float64(score)
 	}
 }

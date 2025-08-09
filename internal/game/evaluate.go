@@ -1,7 +1,9 @@
 // file: internal/game/evaluate.go
 package game
 
-import "math"
+import (
+	"math"
+)
 
 // 你从训练结果里抄过来的
 var learnedW = []float64{
@@ -29,10 +31,12 @@ var (
 
 // 加分上下限
 const (
-	CLONE_BONUS_MAX = 30
-	CLONE_BONUS_MIN = 14
-	JUMP_BONUS_MAX  = 3
-	JUMP_BONUS_MIN  = 0
+	CLONE_BONUS_MAX       = 30
+	CLONE_BONUS_MIN       = 14
+	JUMP_BONUS_MAX        = 3
+	JUMP_BONUS_MIN        = 0
+	blockW                = 2
+	zeroInfectJumpPenalty = -5000
 )
 
 // ========== 新增部分：加权感染数与开局惩罚常量 ==========
@@ -50,7 +54,7 @@ const (
 	// ========= 新增 =========
 	// 如果处于开局阶段(r ≥ openingPhaseThresh)，且我方存在可用克隆却没有使用克隆，
 	// 那么静态评估扣分（值可以根据调试再微调）
-	earlyJumpPenalty = 1
+	earlyJumpPenalty = -50
 )
 
 const (
@@ -157,128 +161,134 @@ func outerRingCoords(b *Board) []HexCoord {
 	return ring
 }
 
+func compSizeAt(b *Board, start HexCoord, color CellState) int {
+	if b.Get(start) != color {
+		return 0
+	}
+	visited := make(map[HexCoord]bool, 16)
+	stack := []HexCoord{start}
+	visited[start] = true
+	size := 0
+	for len(stack) > 0 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		size++
+		for _, d := range cloneDirs {
+			nb := HexCoord{cur.Q + d.Q, cur.R + d.R}
+			if !visited[nb] && b.Get(nb) == color {
+				visited[nb] = true
+				stack = append(stack, nb)
+			}
+		}
+	}
+	return size
+}
+
 func evaluateStatic(b *Board, player CellState) int {
 	op := Opponent(player)
 
-	// 1) 计算空位比例 r
-	coords := b.AllCoords()
-	empties := 0
-	for _, c := range coords {
-		if b.Get(c) == Empty {
-			empties++
-		}
-	}
-	r := float64(empties) / float64(len(coords))
+	// —— 可调权重 —— //
+	const (
+		pieceW          = 5  // 1) 敌我棋子差
+		edgeW           = 2  // 2) 我方外圈每子少量加分
+		blockDiffW      = 3  // 3) 3+ 连通块数量差（<50% 填充才生效）
+		cloneInfW       = 3  // 5) 克隆感染权重（> 跳越）
+		jumpInfW        = 2  // 5) 跳越感染权重
+		weakJumpPenalty = 30 // 4) 弱跳越重罚（可调 120~200）
+	)
 
-	// 2) 如果处于“开局前期”（r ≥ openingPhaseThresh），且对手子数多于我方，就严重惩罚
+	// —— 基础统计 —— //
+	coords := b.AllCoords()
+	total := len(coords)
+	empties := 0
 	myCnt, opCnt := 0, 0
 	for _, c := range coords {
 		switch b.Get(c) {
+		case Empty:
+			empties++
 		case player:
 			myCnt++
 		case op:
 			opCnt++
 		}
 	}
-	openingPenalty := 0
-	if r >= openingPhaseThresh && opCnt > myCnt {
-		openingPenalty = (opCnt - myCnt) * openingPenaltyWeight
-	}
+	filledRatio := float64(total-empties) / float64(total)
 
-	// 3) 动态权重
-	edgeW := dynamicEdgeW(r)
-	pieceW := dynamicPieceW(r)
-	//jumpW := dynamicJumpW(r)
-	infW := dynamicInfW(r)
-
-	// 4) 统计边缘 / 危险
-	outer, danger := 0, 0
-	for _, c := range coords {
-		s := b.Get(c)
-		if s == Empty {
-			continue
-		}
-		onEdge := isOuter(c, b.radius)
-		if s == player {
-			if onEdge {
-				outer++
-			}
-			if isInOpponentRange(b, c, op) {
-				danger++
-			}
-		} else { // 对手
-			if onEdge {
-				outer-- // 对手在边缘记负分
-			}
-		}
-	}
-
-	// 5) 生成走法
-	myMoves := GenerateMoves(b, player)
-	opMoves := GenerateMoves(b, op)
-
-	// 克隆机动性差
-	myCloneCount, opCloneCount := 0, 0
-	for _, m := range myMoves {
-		if m.IsClone() {
-			myCloneCount++
-		}
-	}
-	for _, m := range opMoves {
-		if m.IsClone() {
-			opCloneCount++
-		}
-	}
-	//cloneMobDiff := myCloneCount - opCloneCount
-	//fullMobDiff := len(myMoves) - len(opMoves)
-
-	// 6) 加权感染差
-	infDiffWeighted := maxWeightedInfFromMoves(b, player, myMoves) -
-		maxWeightedInfFromMoves(b, op, opMoves)
-
-	// 7) 早期跳跃惩罚（修改点）
-	//
-	//    若仍在开局阶段且存在可克隆走法，但“最佳跳跃”感染不足 2 颗棋子，
-	//    则认为跳跃收益太低，施加惩罚；否则不扣分。
-	maxJumpInf := maxJumpInfFromMoves(b, player, myMoves) // ← 新增
-	earlyJumpCost := 0
-	if r >= openingPhaseThresh && myCloneCount > 0 && maxJumpInf < 2 {
-		earlyJumpCost = earlyJumpPenalty
-	}
-
-	// 8) 其他打分项
-	outerScore := outer * edgeW
-	holesPenalty := -evaluateHoles(b, player)
+	// 1) 敌我棋子差
 	pieceScore := (myCnt - opCnt) * pieceW
-	safetyScore := -danger * dangerW
 
-	//mobScore := 0
-	//if r >= openingPhaseThresh {
-	//	mobScore = cloneMobDiff * jumpW / 3
-	//} else {
-	//	mobScore = fullMobDiff * jumpW / 3
-	//}
+	// 2) 我方外圈少量加分
+	myEdge := 0
+	for _, c := range coords {
+		if b.Get(c) == player && isOuter(c, b.radius) {
+			myEdge++
+		}
+	}
+	edgeScore := myEdge * edgeW
 
-	finalScore :=
-		pieceScore*2 +
-			//mobScore +
-			infDiffWeighted*infW/2 +
-			outerScore +
-			safetyScore +
-			holesPenalty -
-			openingPenalty -
-			earlyJumpCost
+	// 3) 3+ 连通块数量差（<50% 才生效）
+	blockScore := 0
+	if filledRatio < 0.5 {
+		myBlocks := countBlocks(b, player)
+		opBlocks := countBlocks(b, op)
+		blockScore = (myBlocks - opBlocks) * blockDiffW
+	}
 
-	// —— 中期对手上一步周边加权 —— //
-	if r < midgamePhaseThresh {
-		for _, dir := range Directions {
-			nb := b.LastMove.To.Add(dir)
-			if b.Get(nb) == Empty {
-				finalScore += midgameLastMoveWeight
+	// 4) 弱跳越重罚（按你的新规则）
+	weakJumpScore := 0
+	if b.LastMove.IsJump() {
+		mover := b.Get(b.LastMove.To) // 刚跳的那一方，跳后 To 颜色就是 mover
+		if mover == PlayerA || mover == PlayerB {
+			sameAdj := 0
+			for _, d := range cloneDirs { // 6 邻
+				nb := HexCoord{b.LastMove.To.Q + d.Q, b.LastMove.To.R + d.R}
+				if b.Get(nb) == mover {
+					sameAdj++
+				}
+			}
+			//fmt.Printf("LM=%v  isJump=%v  sameAdj=%d  mover=%v\n",
+			//	b.LastMove, b.LastMove.IsJump(), sameAdj, mover)
+
+			if sameAdj <= 1 {
+				if mover == player {
+					weakJumpScore -= weakJumpPenalty
+				} else {
+					weakJumpScore += weakJumpPenalty
+				}
 			}
 		}
 	}
-	return finalScore
+
+	// 5) 感染潜力（克隆加分 > 跳越）
+	//    用“下一手最大即刻感染数”的差来刻画潜力，并对克隆/跳跃分别加权
+	maxCloneJump := func(side CellState) (cloneMax, jumpMax int) {
+		for _, m := range GenerateMoves(b, side) {
+			cnt := previewInfectedCount(b, m, side)
+			if m.IsClone() {
+				if cnt > cloneMax {
+					cloneMax = cnt
+				}
+			} else { // Jump
+				if cnt > jumpMax {
+					jumpMax = cnt
+				}
+			}
+		}
+		return
+	}
+	myCloneMax, myJumpMax := maxCloneJump(player)
+	opCloneMax, opJumpMax := maxCloneJump(op)
+	infPotentialScore := (myCloneMax*cloneInfW + myJumpMax*jumpInfW) -
+		(opCloneMax*cloneInfW + opJumpMax*jumpInfW)
+
+	// —— 汇总 —— //
+	final := pieceScore +
+		edgeScore +
+		blockScore +
+		weakJumpScore +
+		infPotentialScore
+
+	return final
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,6 +327,37 @@ func maxInfFromMoves(b *Board, pl CellState, moves []Move) int {
 		}
 	}
 	return best
+}
+
+// 统计连通块数：每个连通块只要 size>=3 就计 +1
+func countBlocks(b *Board, player CellState) int {
+	visited := make(map[HexCoord]bool)
+	blocks := 0
+	for _, c := range b.AllCoords() {
+		if visited[c] || b.Get(c) != player {
+			continue
+		}
+		// flood-fill 收集这个连通块
+		size := 0
+		stack := []HexCoord{c}
+		visited[c] = true
+		for len(stack) > 0 {
+			cur := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			size++
+			for _, nb := range b.Neighbors(cur) {
+				if !visited[nb] && b.Get(nb) == player {
+					visited[nb] = true
+					stack = append(stack, nb)
+				}
+			}
+		}
+		// 只要连通块大小 ≥3，就 +1
+		if size >= 3 {
+			blocks++
+		}
+	}
+	return blocks
 }
 
 // evaluateHoles 评估空洞区域被对手跳入的惩罚

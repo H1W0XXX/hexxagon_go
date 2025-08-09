@@ -50,27 +50,24 @@ func Opponent(player CellState) CellState {
 
 // IsClone 返回这步是否是复制（复制：落点是距离 1 的相邻格子）
 func (m Move) IsClone() bool {
+	dq := m.To.Q - m.From.Q
+	dr := m.To.R - m.From.R
 	for _, d := range cloneDirs {
-		if m.From.Q+d.Q == m.To.Q && m.From.R+d.R == m.To.R {
+		if d.Q == dq && d.R == dr {
 			return true
 		}
 	}
 	return false
 }
 
-// IsJump 返回这步是否是跳跃（跳跃：落点是距离 2 的格子）
+// IsJump：只要 (To-From) 等于 jumpDirs 之一，就判定为跳跃
 func (m Move) IsJump() bool {
+	dq := m.To.Q - m.From.Q
+	dr := m.To.R - m.From.R
 	for _, d := range jumpDirs {
-		if m.From.Q+d.Q == m.To.Q && m.From.R+d.R == m.To.R {
+		if d.Q == dq && d.R == dr {
 			return true
 		}
-	}
-	// --- 兜底：有时 jumpDirs 漏掉某方向时仍能识别 ---
-	dq := m.From.Q - m.To.Q
-	dr := m.From.R - m.To.R
-	// hex ring distance = max(|dq|, |dr|, |dq+dr|)
-	if max3(abs(dq), abs(dr), abs(dq+dr)) == 2 {
-		return true
 	}
 	return false
 }

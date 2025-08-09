@@ -60,7 +60,16 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 	ttProbeCount = 0
 	ttHitCount = 0
 
+	if mv, ok := findImmediateWinOrSafeClone(b, player); ok {
+		return mv, true
+	}
 	moves := GenerateMoves(b, player)
+	if len(moves) == 0 {
+		return Move{}, false
+	}
+
+	// —— 新增：根节点就过滤 0 感染跳越 ——
+	moves = filterZeroInfectJumpsOrFallback(b, player, moves)
 	if len(moves) == 0 {
 		return Move{}, false
 	}
@@ -156,7 +165,11 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 			defer wg.Done()
 			// 【改动】从池里拿，不要用 cloneBoard
 			nb := cloneBoardPool(b)
-			_, _ = it.mv.MakeMove(nb, player)
+			//_, _ = it.mv.MakeMove(nb, player)
+			// 清理一下，避免池里残留
+			nb.LastMove = Move{}
+			// 用统一入口，保证 LastMove 被写入
+			_ = mMakeMoveWithUndo(nb, it.mv, player) // 丢掉 undo 没关系，这块本来就不回滚
 			score := alphaBeta(
 				nb, nb.hash,
 				Opponent(player), player,
@@ -223,8 +236,10 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 // α-β + 置换表
 // ------------------------------------------------------------
 func mMakeMoveWithUndo(b *Board, mv Move, player CellState) undoInfo {
+	// 确保评估能看到“刚才这步”
+	b.LastMove = mv
+
 	infected, u := mv.MakeMove(b, player)
-	// infected 可以用于播放动画或分析，但对搜索本身不需要特别处理
 	_ = infected
 	return u
 }
@@ -243,7 +258,7 @@ func alphaBeta(
 			empties++
 		}
 	}
-	r := float64(empties) / float64(len(coords))
+	//r := float64(empties) / float64(len(coords))
 	// ————————————————————————————————————————————————————————————————
 
 	// 1) 生成所有走法
@@ -297,84 +312,84 @@ func alphaBeta(
 	if current == original {
 		// === MAX 节点 ===
 		bestScore = math.MinInt32
-		for i, mv := range moves {
-			// ———— 新增 —— 对“开局前期非感染跳跃”进行惩罚 ——
-			if r >= openingPhaseThresh && mv.IsJump() {
-				infected := previewInfectedCount(b, mv, current)
-				if infected == 0 {
-					// 非感染跳跃，罚分
-					score := math.MinInt32 / 2
-					// 更新 bestScore / alpha
-					if score > bestScore {
-						bestScore = score
-						bestIdx = uint8(i)
-					}
-					if score > alpha {
-						alpha = score
-					}
-					continue
-				}
+
+		// ———— 新增：过滤开局阶段 0 感染跳跃 ————
+		var filtered []Move
+		for _, mv := range moves {
+			//if r >= openingPhaseThresh && mv.IsJump() && previewInfectedCount(b, mv, current) == 0 {
+			if mv.IsJump() && previewInfectedCount(b, mv, current) == 0 {
+				// 跳跃但0感染，丢弃
+				continue
 			}
-			// ——————————————————————————————————————————————
+			filtered = append(filtered, mv)
+		}
+		moves = filtered
+		// 如果全部走法都被过滤，回退到原始走法列表，避免空搜索
+		//if len(moves) == 0 {
+		//	moves = GenerateMoves(b, current)
+		//}
+		// ——————————————————————————————
 
-			// 先保存“父节点的 hash”
+		// PV-Move 排序：置换表里记录的最佳索引先尝试
+		if ok, idx := probeBestIdx(hash); ok {
+			i := int(idx)
+			if i < len(moves) {
+				moves[0], moves[i] = moves[i], moves[0]
+			}
+		}
+
+		// 遍历剩余走法
+		for i, mv := range moves {
+			// 计算增量 Zobrist hash
 			origHash := b.hash
+			childHash := origHash ^ zobristSide[sideIdx(current)]
 
-			// 计算 childHash：先把 from/to/感染全部 xor 掉、再 xor 进新状态
-			childHash := origHash
-			childHash ^= zobristSide[sideIdx(current)] //去掉当前行棋方
-
-			// ① 把 from(原来是 current) xor 掉
+			// from → Empty（若跳跃则额外清除原位）
 			childHash ^= zobristKey(mv.From, current)
-			// ② 如果是 Jump，把 from→Empty
 			if mv.IsJump() {
 				childHash ^= zobristKey(mv.From, Empty)
 			}
-			// ③ 把 to(原来是 Empty) xor 掉
+			// to → current
 			childHash ^= zobristKey(mv.To, Empty)
-			// ④ 把 to→ current
 			childHash ^= zobristKey(mv.To, current)
-			for _, n := range b.Neighbors(mv.To) { // ★ 增量感染
+			// 感染翻转
+			for _, n := range b.Neighbors(mv.To) {
 				if b.Get(n) == Opponent(current) {
 					childHash ^= zobristKey(n, Opponent(current))
 					childHash ^= zobristKey(n, current)
 				}
 			}
-
+			// 切换行棋方
 			next := Opponent(current)
 			childHash ^= zobristSide[sideIdx(next)]
-			// 让 b.hash 也同步修改到 childHash
+			// 更新棋盘 hash
 			b.hash = childHash
 
-			// 真正执行 MakeMove，并记录 undo
+			// 真正落子
 			undo := mMakeMoveWithUndo(b, mv, current)
 
-			// 递归下去
-			score := alphaBeta(b, childHash, Opponent(current), original, depth-1, alpha, beta)
+			// 递归搜索
+			score := alphaBeta(b, childHash, next, original, depth-1, alpha, beta)
 
-			// 回溯：先把棋盘内容恢复
+			// 回溯
 			b.UnmakeMove(undo)
-			// 再把 b.hash 恢复
 			b.hash = origHash
 
-			if mv.IsJump() {
-				if !useLearned {
-					score -= jumpMovePenalty
-				}
-
+			// （可选）对所有跳跃加上固定惩罚，比如 jumpMovePenalty
+			if mv.IsJump() && !useLearned {
+				score -= jumpMovePenalty
 			}
 
-			// 更新 bestScore / α / 剪枝
+			// 更新 bestScore / α / β-剪枝
 			if score > bestScore {
 				bestScore = score
 				bestIdx = uint8(i)
 			}
 			if score > alpha {
 				alpha = score
-			}
-			if alpha >= beta {
-				// 触发 β-剪枝，直接跳出
-				break
+				if alpha >= beta {
+					break
+				}
 			}
 		}
 	} else {
@@ -460,6 +475,73 @@ func min(a, b int) int {
 	return b
 }
 
+func chooseEndgameDepth(b *Board, base int) int {
+	// 统计空格
+	empties := 0
+	for _, c := range b.AllCoords() {
+		if b.Get(c) == Empty {
+			empties++
+		}
+	}
+	switch {
+	case empties <= 6:
+		// 残局很小，基本可以搜到底（每回合至少占/改变1格，给点冗余）
+		return 2*empties + 2
+	case empties <= 10:
+		return base + 2
+	//case empties <= 14:
+	//	return base + 2
+	default:
+		return base
+	}
+}
+func findImmediateWinOrSafeClone(b *Board, p CellState) (Move, bool) {
+	op := Opponent(p)
+	best := Move{}
+	found := false
+
+	for _, mv := range GenerateMoves(b, p) {
+		// 只考虑克隆（你就想防“跳了被反超”）
+		if !mv.IsClone() {
+			continue
+		}
+
+		nb := cloneBoard(b)
+		nb.LastMove = mv
+		_, _ = mv.MakeMove(nb, p)
+
+		// 1) 立即终局 = 对手无棋 or 无空格：直接选
+		empties := 0
+		for _, c := range nb.AllCoords() {
+			if nb.Get(c) == Empty {
+				empties++
+			}
+		}
+		if len(GenerateMoves(nb, op)) == 0 || empties == 0 {
+			return mv, true
+		}
+
+		// 2) “一手后仍领先”的保胜：我方子数差 > 对手下一手最大感染
+		my := nb.CountPieces(p)
+		his := nb.CountPieces(op)
+		diff := my - his
+		// 估计对手下一手最多能吃多少（即时感染最大值）
+		opMaxEat := 0
+		for _, omv := range GenerateMoves(nb, op) {
+			eat := previewInfectedCount(nb, omv, op)
+			if eat > opMaxEat {
+				opMaxEat = eat
+			}
+		}
+		if diff > opMaxEat {
+			best = mv
+			found = true
+			// 不 return：继续找有没有“更好”的（可直接 return 也行）
+		}
+	}
+	return best, found
+}
+
 func DeepSearch(b *Board, hash uint64, side CellState, depth int) int {
 
 	return alphaBeta(b, hash, side, side, depth, -32000, 32000)
@@ -480,7 +562,8 @@ func IterativeDeepening(
 			storeBestIdx(h, idx)
 		}
 		// 调用已有的并行根节点搜索
-		mv, hit := FindBestMoveAtDepth(root, player, depth)
+		depth2 := chooseEndgameDepth(root, depth)
+		mv, hit := FindBestMoveAtDepth(root, player, depth2)
 		if !hit {
 			break // 无合法走法
 		}
@@ -585,4 +668,29 @@ func alphaBetaNoTT(
 		}
 	}
 	return best
+}
+
+// 根节点/任意节点可复用的过滤器：尽量剔除“0 感染跳跃”，但保证不至于空集合
+func filterZeroInfectJumpsOrFallback(b *Board, side CellState, moves []Move) []Move {
+	filtered := make([]Move, 0, len(moves))
+	for _, mv := range moves {
+		if mv.IsJump() && previewInfectedCount(b, mv, side) == 0 {
+			continue
+		}
+		filtered = append(filtered, mv)
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	// 如果全被剔空了，至少保留克隆；再不行就原样返回，避免无解
+	clones := make([]Move, 0, len(moves))
+	for _, mv := range moves {
+		if mv.IsClone() {
+			clones = append(clones, mv)
+		}
+	}
+	if len(clones) > 0 {
+		return clones
+	}
+	return moves
 }

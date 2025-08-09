@@ -115,6 +115,8 @@ func (gs *GameScreen) handleInput() {
 				}
 				// 在副本上模拟这步
 				bCopy := gs.state.Board.Clone()
+				bCopy.LastMove = mv
+
 				if _, err := mv.Apply(bCopy, gs.state.CurrentPlayer); err != nil {
 					continue
 				}
@@ -122,7 +124,7 @@ func (gs *GameScreen) handleInput() {
 				//score := game.AlphaBeta(bCopy, gs.state.CurrentPlayer, 4)
 				//score := game.Evaluate(bCopy, gs.state.CurrentPlayer)
 				if gs.showScores {
-					score := game.AlphaBetaNoTT(bCopy, player, 2)
+					score := game.Evaluate(bCopy, player)
 					gs.ui.MoveScores[mv.To] = float64(score)
 				}
 			}

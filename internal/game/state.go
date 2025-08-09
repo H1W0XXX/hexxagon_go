@@ -59,10 +59,56 @@ func NewGameState(radius int) *GameState {
 
 	// 把“行棋方随机键” XOR 进棋盘哈希
 	b.hash ^= zobristSide[sideIdx(gs.CurrentPlayer)]
-	
+
 	gs.updateScores() // 计算初始分数
 	return gs
 }
+
+//func NewGameState(radius int) *GameState {
+//	// 创建空棋盘
+//	b := NewBoard(radius)
+//	// 角落坐标 (A 方)
+//	cornersA := []HexCoord{
+//		{radius, 0},
+//		{0, -radius},
+//		{-radius, radius},
+//	}
+//	// 对立角坐标 (B 方)
+//	cornersB := []HexCoord{
+//		{-radius, 0},
+//		{0, radius},
+//		{radius, -radius},
+//	}
+//	// 放置初始棋子
+//	for _, c := range cornersA {
+//		_ = b.Set(c, PlayerA)
+//	}
+//	for _, c := range cornersB {
+//		_ = b.Set(c, PlayerB)
+//	}
+//
+//	// 放置障碍物
+//	centerBlocks := []HexCoord{
+//		{1, 0},
+//		{-1, 1},
+//		{0, -1},
+//	}
+//	for _, c := range centerBlocks {
+//		_ = b.Set(c, Blocked)
+//	}
+//
+//	// 构造 GameState
+//	gs := &GameState{
+//		Board:         b,
+//		CurrentPlayer: PlayerA,
+//	}
+//
+//	// 把“行棋方随机键” XOR 进棋盘哈希
+//	b.hash ^= zobristSide[sideIdx(gs.CurrentPlayer)]
+//
+//	gs.updateScores() // 计算初始分数
+//	return gs
+//}
 
 // updateScores 重新统计棋子数量，更新 ScoreA 和 ScoreB
 func (gs *GameState) updateScores() {

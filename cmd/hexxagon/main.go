@@ -6,13 +6,12 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"hexxagon_go/internal/ui"
 	"log"
-	//"runtime"
 	"strconv"
-	//"runtime"
 )
 
 // import _ "net/http/pprof"
 // import "golang.org/x/sys/windows"
+// import "runtime"
 //
 //	func init() {
 //		if runtime.GOOS == "windows" {

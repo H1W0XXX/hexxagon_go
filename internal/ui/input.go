@@ -187,6 +187,8 @@ func (gs *GameScreen) handleInput() {
 		// 成功走子，设置 AI 延迟并清空选中
 		gs.aiDelayUntil = time.Now().Add(total)
 		gs.selected = nil
+		leavePerf()
 	}
 	gs.refreshMoveScores()
+
 }

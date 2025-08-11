@@ -256,14 +256,14 @@ func (gs *GameScreen) performMove(move game.Move, player game.CellState) (time.D
 	}
 }
 
-var firstFrame = true
+//var firstFrame = true
 
 // Update 更新游戏状态
 func (gs *GameScreen) Update() error {
-	if firstFrame {
-		firstFrame = false
-		ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum) // 已经进入事件循环，安全
-	}
+	//if firstFrame {
+	//	firstFrame = false
+	//	ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum) // 已经进入事件循环，安全
+	//}
 
 	now := time.Now()
 	if !lastUpdate.IsZero() {
@@ -340,6 +340,7 @@ func (gs *GameScreen) Update() error {
 	}
 
 	// 5) 人类回合
+	enterPerf()
 	gs.handleInput()
 	return nil
 }

@@ -486,7 +486,7 @@ func chooseEndgameDepth(b *Board, base int) int {
 	switch {
 	case empties <= 6:
 		// 残局很小，基本可以搜到底（每回合至少占/改变1格，给点冗余）
-		return 2*empties + 2
+		return base + 2
 	case empties <= 10:
 		return base + 2
 	//case empties <= 14:

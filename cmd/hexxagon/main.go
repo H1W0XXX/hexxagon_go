@@ -10,6 +10,7 @@ import (
 )
 
 // import _ "net/http/pprof"
+
 // import "golang.org/x/sys/windows"
 // import "runtime"
 //
@@ -64,4 +65,7 @@ func main() {
 	}
 }
 
+// $dll = "D:\go\ddddocr_go\gpu\onnxruntime.dll"
+// $env:ONNXRUNTIME_SHARED_LIBRARY_PATH = $dll
+// $env:Path = "D:\go\ddddocr_go\gpu;" + $env:Path
 // go build -ldflags="-s -w" -gcflags="all=-trimpath=${PWD}" -asmflags="all=-trimpath=${PWD}" -o hexxagon.exe .\cmd\hexxagon\main.go

@@ -5,7 +5,7 @@ import (
 	"encoding/csv"
 	"flag"
 	"hexxagon_go/internal/game"
-	"hexxagon_go/internal/ml"
+	//"hexxagon_go/internal/ml"
 	"io"
 	"log"
 	"math/rand"
@@ -26,7 +26,7 @@ func main() {
 	_ = game.AllCoords(4)
 
 	// ───── 修复 CSV ─────
-	done := repairCSV(*outFile, ml.TensorLen+3)
+	done := repairCSV(*outFile, game.TensorLen+3)
 
 	// ───── 打开文件 + Writer + 互斥锁 ─────
 	f, err := os.OpenFile(*outFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
@@ -107,9 +107,9 @@ func playOneGame(depth int, id int, r *rand.Rand) ([][]string, bool) {
 		if !ok {
 			break
 		}
-		tensor := ml.EncodeBoardTensor(state.Board, player)
-		mvIdx := ml.AxialToIndex(mv.To)
-		row := make([]string, 0, ml.TensorLen+3)
+		tensor := game.EncodeBoardTensor(state.Board, player)
+		mvIdx := game.AxialToIndex(mv.To)
+		row := make([]string, 0, game.TensorLen+3)
 		for _, v := range tensor {
 			if v == 0 {
 				row = append(row, "0")

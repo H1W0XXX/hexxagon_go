@@ -14,6 +14,7 @@ require (
 	github.com/ebitengine/purego v0.8.0 // indirect
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/jezek/xgb v1.1.1 // indirect
+	github.com/yalue/onnxruntime_go v1.21.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.25.0 // indirect
 	golang.org/x/text v0.27.0 // indirect

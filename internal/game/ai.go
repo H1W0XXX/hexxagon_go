@@ -17,7 +17,7 @@ func init() {
 
 }
 
-// const useLearned = false
+// const useLearned = true
 const useLearned = false
 const jumpMovePenalty = 25
 
@@ -111,7 +111,10 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 			moves = clones
 		}
 	}
-
+	pruned := policyPruneRoot(b, player, moves)
+	if len(pruned) > 0 {
+		moves = pruned
+	}
 	// ---------- 1) 走法粗评分（真实 evaluate） ----------
 	type scored struct {
 		mv    Move
@@ -127,7 +130,7 @@ func FindBestMoveAtDepth(b *Board, player CellState, depth int) (Move, bool) {
 		// 静态评估
 		var score int
 		if useLearned {
-			score = Predict(b, player)
+			score = EvaluateNN(b, player)
 		} else {
 			score = evaluateStatic(b, player)
 		}
@@ -268,7 +271,7 @@ func alphaBeta(
 	if depth == 0 || len(moves) == 0 {
 		var val int
 		if useLearned {
-			val = Predict(b, original)
+			val = EvaluateNN(b, original)
 		} else {
 			val = evaluateStatic(b, original)
 		}

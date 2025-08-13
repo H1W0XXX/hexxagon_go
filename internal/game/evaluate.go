@@ -1,27 +1,6 @@
 // file: internal/game/evaluate.go
 package game
 
-import (
-	"math"
-)
-
-// 你从训练结果里抄过来的
-var learnedW = []float64{
-	-0.15342230,
-	-0.05578179,
-	-0.00084953,
-	0.08653770,
-	0.02525369,
-	-0.00093363,
-	0.00704528,
-	-0.00498269,
-	0.02515402,
-	-0.00310400,
-	0.09628337,
-}
-
-const learnedB = -1.8162169456481934
-
 // 可调参数
 var (
 	cloneThresh = 0.25      // 克隆/跳跃阈值
@@ -191,10 +170,10 @@ func evaluateStatic(b *Board, player CellState) int {
 	const (
 		pieceW          = 5  // 1) 敌我棋子差
 		edgeW           = 2  // 2) 我方外圈每子少量加分
-		blockDiffW      = 3  // 3) 3+ 连通块数量差（<50% 填充才生效）
+		blockDiffW      = 4  // 3) 3+ 连通块数量差（<50% 填充才生效）
 		cloneInfW       = 3  // 5) 克隆感染权重（> 跳越）
 		jumpInfW        = 2  // 5) 跳越感染权重
-		weakJumpPenalty = 30 // 4) 弱跳越重罚（可调 120~200）
+		weakJumpPenalty = 50 // 4) 弱跳越重罚（可调 120~200）
 	)
 
 	// —— 基础统计 —— //
@@ -228,7 +207,7 @@ func evaluateStatic(b *Board, player CellState) int {
 
 	// 3) 3+ 连通块数量差（<50% 才生效）
 	blockScore := 0
-	if filledRatio < 0.5 {
+	if filledRatio < 0.4 {
 		myBlocks := countBlocks(b, player)
 		opBlocks := countBlocks(b, op)
 		blockScore = (myBlocks - opBlocks) * blockDiffW
@@ -449,117 +428,13 @@ func previewInfectedCount(b *Board, mv Move, player CellState) int {
 	return count
 }
 
-// ExtractFeatures 从棋盘状态和当前玩家提取一组特征，用于训练或线性评估
-func ExtractFeatures(b *Board, player CellState) []float64 {
-	op := Opponent(player)
-	coords := b.AllCoords()
-	// 1) 空位比例 r
-	empties := 0
-	for _, c := range coords {
-		if b.Get(c) == Empty {
-			empties++
-		}
-	}
-	n := float64(len(coords))
-	r := float64(empties) / n
-
-	// 2) 棋子数差
-	myCnt, opCnt := 0, 0
-	outer, danger := 0, 0
-	for _, c := range coords {
-		s := b.Get(c)
-		if s == player {
-			myCnt++
-			// 边缘
-			if isOuter(c, b.radius) {
-				outer++
-			}
-			// 危险
-			if isInOpponentRange(b, c, op) {
-				danger++
-			}
-		} else if s == op {
-			opCnt++
-			if isOuter(c, b.radius) {
-				outer--
-			}
-		}
-	}
-
-	// 3) 机动性差：克隆或跳跃计数
-	myMoves := GenerateMoves(b, player)
-	opMoves := GenerateMoves(b, op)
-	cloneMobDiff, fullMobDiff := 0, len(myMoves)-len(opMoves)
-	for _, m := range myMoves {
-		if m.IsClone() {
-			cloneMobDiff++
-		}
-	}
-
-	mobDiff := fullMobDiff
-	if r >= openingPhaseThresh {
-		mobDiff = cloneMobDiff
-	}
-
-	// 4) 加权感染差
-	infDiffWeighted := maxWeightedInfFromMoves(b, player, myMoves) -
-		maxWeightedInfFromMoves(b, op, opMoves)
-
-	// 5) 洞惩罚
-	holesPenalty := -evaluateHoles(b, player)
-
-	// 6) 开局惩罚
-	openingPenalty := 0
-	if r >= openingPhaseThresh && opCnt > myCnt {
-		openingPenalty = (opCnt - myCnt) * openingPenaltyWeight
-	}
-
-	// 7) 早期跳跃惩罚
-	earlyJumpCost := 0
-	if r >= openingPhaseThresh && cloneMobDiff > 0 && infDiffWeighted == 0 {
-		earlyJumpCost = earlyJumpPenalty
-	}
-
-	// 8) 中期对手上一步周边加权
-	lastMoveBonus := 0
-	if r < midgamePhaseThresh && b.LastMove.To != (HexCoord{}) {
-		for _, dir := range Directions {
-			nb := b.LastMove.To.Add(dir)
-			if b.Get(nb) == Empty {
-				lastMoveBonus += midgameLastMoveWeight
-			}
-		}
-	}
-	isJump := 0.0
-	if b.LastMove.IsJump() {
-		isJump = 1.0
-	}
-
-	// 特征向量按顺序返回：
-	// [r, myCnt-opCnt, outer, danger, mobDiff, infDiffWeighted,
-	//  holesPenalty, openingPenalty, earlyJumpCost, lastMoveBonus]
-	return []float64{
-		r,
-		float64(myCnt - opCnt),
-		float64(outer),
-		float64(danger),
-		float64(mobDiff),
-		float64(infDiffWeighted),
-		float64(holesPenalty),
-		float64(openingPenalty),
-		float64(earlyJumpCost),
-		float64(lastMoveBonus),
-		isJump,
-	}
-}
-
-// Predict 用线性模型估值。注意：ExtractFeatures 就是之前加好的那 11 维特征函数
-func Predict(b *Board, player CellState) int {
-	feats := ExtractFeatures(b, player)
-	sum := learnedB
-	for i, f := range feats {
-		sum += learnedW[i] * f
-	}
-	// 四舍五入到整数
-	return int(math.Round(sum))
-}
+// Predict 改为调用 CNN 的 value，失败则回退到静态评估
+//func Predict(b *Board, player CellState) int {
+//	if _, v, err := CNNPredict(b, player); err == nil {
+//		// value ∈ (-1,1) → 映射到分数区间（可按你原有量级调）
+//		fmt.Printf("模型错误 %v \n", err)
+//		return int(math.Round(float64(v) * 100.0))
+//	}
+//	// 回退：原 evaluateStatic
+//	return evaluateStatic(b, player)
+//}
